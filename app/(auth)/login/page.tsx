@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { GoogleSignInButton } from "@/components/custom/google-sign-in-button"
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -61,6 +62,7 @@ export default function LoginPage() {
             {isLoading ? 'Loading...' : 'Login'}
           </Button>
         </form>
+        <GoogleSignInButton />
         <div className="text-center text-sm">
           Don&apos;t have an account?{' '}
           <Link className="underline" href="/register">
