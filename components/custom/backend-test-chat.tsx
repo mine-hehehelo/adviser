@@ -1,6 +1,8 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useState } from 'react';
+import { useSWRConfig } from 'swr';
 
 import { SidebarToggle } from '@/components/custom/sidebar-toggle';
 import { Button } from '@/components/ui/button';
@@ -33,9 +35,14 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return body as T;
 }
 
-export function BackendTestChat() {
-  const [conversationId, setConversationId] =
-    useState<string | null>(null);
+export function BackendTestChat({
+  initialConversationId,
+}: {
+  initialConversationId?: string;
+}) {
+  const router = useRouter();
+  const { mutate } = useSWRConfig();
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<SavedMessage[]>([]);
   const [input, setInput] = useState('');
   const [isStarting, setIsStarting] = useState(true);
@@ -45,22 +52,28 @@ export function BackendTestChat() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadLatestConversation() {
+    async function loadConversation() {
       try {
-        const response = await fetch('/api/conversations');
+        let selectedConversationId = initialConversationId ?? null;
 
-        const result = await parseResponse<{
-          conversations: Conversation[];
-        }>(response);
+        if (!selectedConversationId) {
+          const response = await fetch('/api/conversations');
 
-        const latestConversation = result.conversations[0];
+          const result = await parseResponse<{
+            conversations: Conversation[];
+          }>(response);
 
-        if (!latestConversation || cancelled) {
+          selectedConversationId = result.conversations[0]?.id ?? null;
+        }
+
+        if (!selectedConversationId || cancelled) {
+          setConversationId(null);
+          setMessages([]);
           return;
         }
 
         const historyResponse = await fetch(
-          `/api/conversations/${latestConversation.id}/messages`
+          `/api/conversations/${selectedConversationId}/messages`
         );
 
         const history = await parseResponse<{
@@ -68,7 +81,7 @@ export function BackendTestChat() {
         }>(historyResponse);
 
         if (!cancelled) {
-          setConversationId(latestConversation.id);
+          setConversationId(selectedConversationId);
           setMessages(history.messages);
         }
       } catch (caughtError) {
@@ -86,12 +99,15 @@ export function BackendTestChat() {
       }
     }
 
-    void loadLatestConversation();
+    setIsStarting(true);
+    setError(null);
+
+    void loadConversation();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialConversationId]);
 
   async function createConversation(title: string) {
     const response = await fetch('/api/conversations', {
@@ -107,6 +123,7 @@ export function BackendTestChat() {
     }>(response);
 
     setConversationId(result.conversation.id);
+    await mutate('/api/conversations');
 
     return result.conversation.id;
   }
@@ -115,9 +132,14 @@ export function BackendTestChat() {
     setError(null);
 
     try {
-      await createConversation('New advisor conversation');
+      const newConversationId = await createConversation(
+        'New advisor conversation'
+      );
+
       setMessages([]);
       setInput('');
+
+      router.push(`/chat/${newConversationId}`);
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -127,9 +149,7 @@ export function BackendTestChat() {
     }
   }
 
-  async function handleSubmit(
-    event: FormEvent<HTMLFormElement>
-  ) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const text = input.trim();
@@ -145,9 +165,7 @@ export function BackendTestChat() {
       let activeConversationId = conversationId;
 
       if (!activeConversationId) {
-        activeConversationId = await createConversation(
-          text.slice(0, 60)
-        );
+        activeConversationId = await createConversation(text.slice(0, 60));
       }
 
       const sendResponse = await fetch(
@@ -176,6 +194,11 @@ export function BackendTestChat() {
 
       setMessages(history.messages);
       setInput('');
+      await mutate('/api/conversations');
+
+      if (!initialConversationId) {
+        router.replace(`/chat/${activeConversationId}`);
+      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -194,9 +217,7 @@ export function BackendTestChat() {
 
         <div>
           <div className="font-semibold">Advisor Console</div>
-          <div className="text-xs text-muted-foreground">
-            Backend test mode
-          </div>
+          <div className="text-xs text-muted-foreground">Backend test mode</div>
         </div>
 
         <Button
@@ -236,9 +257,7 @@ export function BackendTestChat() {
                 {message.role === 'user' ? 'You' : 'Advisor'}
               </div>
 
-              <div className="whitespace-pre-wrap">
-                {message.content}
-              </div>
+              <div className="whitespace-pre-wrap">{message.content}</div>
             </div>
           ))}
 
@@ -248,11 +267,7 @@ export function BackendTestChat() {
             </p>
           )}
 
-          {error && (
-            <p className="text-sm text-red-500">
-              {error}
-            </p>
-          )}
+          {error && <p className="text-sm text-red-500">{error}</p>}
         </div>
       </main>
 
@@ -263,10 +278,7 @@ export function BackendTestChat() {
         <Textarea
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {
-            if (
-              event.key === 'Enter' &&
-              !event.shiftKey
-            ) {
+            if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }
@@ -276,10 +288,7 @@ export function BackendTestChat() {
           value={input}
         />
 
-        <Button
-          disabled={!input.trim() || isSending}
-          type="submit"
-        >
+        <Button disabled={!input.trim() || isSending} type="submit">
           {isSending ? 'Sending...' : 'Send'}
         </Button>
       </form>

@@ -2,6 +2,8 @@
 
 import { User } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+import { useSWRConfig } from 'swr';
 
 import { PlusIcon } from '@/components/custom/icons';
 import { SidebarHistory } from '@/components/custom/sidebar-history';
@@ -23,6 +25,47 @@ export function AppSidebar({ user }: { user: User | null }) {
   const router = useRouter();
   const { setOpenMobile } = useSidebar();
 
+  const { mutate } = useSWRConfig();
+  const [isCreating, setIsCreating] = useState(false);
+
+  async function createConversation() {
+    if (isCreating) {
+      return;
+    }
+
+    setIsCreating(true);
+
+    try {
+      const response = await fetch('/api/conversations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: 'New advisor conversation',
+        }),
+      });
+
+      const body = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          body.error ?? `Could not create conversation (${response.status})`
+        );
+      }
+
+      await mutate('/api/conversations');
+
+      setOpenMobile(false);
+      router.push(`/chat/${body.conversation.id}`);
+      router.refresh();
+    } catch (error) {
+      console.error('Could not create conversation:', error);
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
   return (
     <Sidebar className="group-data-[side=left]:border-r-0">
       <SidebarHeader>
@@ -37,18 +80,15 @@ export function AppSidebar({ user }: { user: User | null }) {
               className="flex flex-row gap-3 items-center"
             >
               <span className="text-lg font-semibold px-2 hover:bg-muted rounded-md cursor-pointer">
-                Chatbot
+                Advisor Console
               </span>
             </div>
-            <BetterTooltip content="New Chat" align="start">
+            <BetterTooltip content="New conversation" align="start">
               <Button
                 variant="ghost"
                 className="p-2 h-fit"
-                onClick={() => {
-                  setOpenMobile(false);
-                  router.push('/');
-                  router.refresh();
-                }}
+                onClick={createConversation}
+                disabled={isCreating}
               >
                 <PlusIcon />
               </Button>
