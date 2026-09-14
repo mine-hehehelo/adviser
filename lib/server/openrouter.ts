@@ -44,9 +44,12 @@ function getOpenRouterConfiguration() {
     throw new Error('OpenRouter API key is missing');
   }
 
-  if (model !== 'openrouter/free') {
+    if (
+    !model ||
+    (model !== 'openrouter/free' && !model.endsWith(':free'))
+  ) {
     throw new Error(
-      'Only openrouter/free is allowed during free testing'
+      'Only free OpenRouter models are allowed during testing'
     );
   }
 
