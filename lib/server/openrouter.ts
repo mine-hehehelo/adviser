@@ -2,8 +2,9 @@ import 'server-only';
 
 import { HttpError } from '@/lib/server/errors';
 
-const OPENROUTER_ENDPOINT =
-  'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+
+const MAX_COMPLETION_TOKENS = 500;
 
 export type OpenRouterMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -14,9 +15,9 @@ export type OpenRouterResult = {
   reply: string;
   model: string;
   usage: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
+    promptTokens: number | null;
+    completionTokens: number | null;
+    totalTokens: number | null;
     costUsd: number | null;
   };
 };
@@ -44,18 +45,50 @@ function getOpenRouterConfiguration() {
     throw new Error('OpenRouter API key is missing');
   }
 
-    if (
-    !model ||
-    (model !== 'openrouter/free' && !model.endsWith(':free'))
-  ) {
-    throw new Error(
-      'Only free OpenRouter models are allowed during testing'
-    );
+  if (!model || (model !== 'openrouter/free' && !model.endsWith(':free'))) {
+    throw new Error('Only free OpenRouter models are allowed during testing');
   }
 
   return {
     apiKey,
     model,
+  };
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function readNonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function readUsage(result: OpenRouterResponse): OpenRouterResult['usage'] {
+  const promptTokens = readNonNegativeInteger(result.usage?.prompt_tokens);
+
+  const completionTokens = readNonNegativeInteger(
+    result.usage?.completion_tokens
+  );
+
+  const reportedTotal = readNonNegativeInteger(result.usage?.total_tokens);
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens:
+      reportedTotal ??
+      (promptTokens !== null && completionTokens !== null
+        ? promptTokens + completionTokens
+        : null),
+    costUsd: readNonNegativeNumber(result.usage?.cost),
   };
 }
 
@@ -78,7 +111,7 @@ export async function generateAdvisorReply(
         model,
         messages,
         temperature: 0.4,
-        max_tokens: 500,
+        max_tokens: MAX_COMPLETION_TOKENS,
       }),
       signal: AbortSignal.timeout(60_000),
     });
@@ -88,16 +121,11 @@ export async function generateAdvisorReply(
       error instanceof Error ? error.message : 'Unknown error'
     );
 
-    throw new HttpError(
-      502,
-      'The advisor service is temporarily unavailable'
-    );
+    throw new HttpError(502, 'The advisor service is temporarily unavailable');
   }
 
   if (!response.ok) {
-    console.error(
-      `OpenRouter returned status ${response.status}`
-    );
+    console.error(`OpenRouter returned status ${response.status}`);
 
     if (response.status === 429) {
       throw new HttpError(
@@ -106,33 +134,20 @@ export async function generateAdvisorReply(
       );
     }
 
-    throw new HttpError(
-      502,
-      'The advisor service is temporarily unavailable'
-    );
+    throw new HttpError(502, 'The advisor service is temporarily unavailable');
   }
 
   const result = (await response.json()) as OpenRouterResponse;
+
   const reply = result.choices?.[0]?.message?.content?.trim();
 
   if (!reply) {
-    throw new HttpError(
-      502,
-      'The advisor did not return a usable response'
-    );
+    throw new HttpError(502, 'The advisor did not return a usable response');
   }
 
   return {
     reply,
     model: result.model ?? model,
-    usage: {
-      promptTokens: result.usage?.prompt_tokens ?? 0,
-      completionTokens: result.usage?.completion_tokens ?? 0,
-      totalTokens: result.usage?.total_tokens ?? 0,
-      costUsd:
-        typeof result.usage?.cost === 'number'
-          ? result.usage.cost
-          : null,
-    },
+    usage: readUsage(result),
   };
 }
