@@ -1,227 +1,171 @@
-<a href="https://chat.vercel.ai/">
-  <img alt="Next.js 14 and App Router-ready AI chatbot." src="app/(chat)/opengraph-image.png">
-  <h1 align="center">Next.js AI Chatbot x Supabase</h1>
-</a>
+# Advisor Console
 
-<p align="center">
-  An Open-Source AI Chatbot Template Built With Next.js and the AI SDK by Vercel.
-</p>
+Advisor Console is a backend rebuild of a Next.js and Supabase chatbot template
 
-<p align="center">
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#model-providers"><strong>Model Providers</strong></a> ·
-  <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
-  <a href="#running-locally"><strong>Running locally</strong></a>
-</p>
-<br/>
+The backend supports one advisor, saved conversations, private prompt documents, usage controls and administrator review
 
-## Features
+## Source
 
-- [Next.js](https://nextjs.org) App Router
-  - Advanced routing for seamless navigation and performance
-  - React Server Components (RSCs) and Server Actions for server-side rendering and increased performance
-  - Built-in optimizations for images, fonts, and static assets
-- [AI SDK](https://sdk.vercel.ai/docs)
-  - Unified API for generating text, structured objects, and tool calls with LLMs
-  - Hooks for building dynamic chat and generative user interfaces
-  - Supports OpenAI (default), Anthropic, Cohere, and other model providers
-  - Built-in streaming support for real-time AI responses
-- [shadcn/ui](https://ui.shadcn.com)
-  - Styling with [Tailwind CSS](https://tailwindcss.com)
-  - Component primitives from [Radix UI](https://radix-ui.com) for accessibility and flexibility
-  - Customizable themes and dark mode support
-- [Supabase](https://supabase.com) Integration
-  - [Supabase Postgres DB](https://supabase.com/docs/guides/database) for robust chat history and user data storage
-  - [Supabase File Storage](https://supabase.com/docs/guides/storage) for efficient file management and uploads
-  - [Supabase Auth](https://supabase.com/docs/guides/auth) with multiple authentication providers and row-level security
-  - Real-time subscriptions for live updates
+This project derives from the [Next.js AI Chatbot with Supabase](https://github.com/nolly-studio/ai-chatbot-supabase) template
 
-## Model Providers
+The template supplied the Next.js application, Supabase connection, authentication structure and user interface components
 
-This template ships with OpenAI `gpt-4o` as the default. However, with the [AI SDK](https://sdk.vercel.ai/docs), you can switch LLM providers to [OpenAI](https://openai.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://sdk.vercel.ai/providers/ai-sdk-providers) with just a few lines of code.
+The original template state is saved in commit `476efe2`
 
-<div id="youtube-onboarding-video">
+The original database migrations remain in `template-reference/template-migrations/`
 
-<div align="left">
-  <h2>YouTube Onboarding Video</h2>
-   <h4>This video walks you through how to set up the ai chatbot with supabase from scratch. We will:</h4>
-  <ul style="text-align: left; display: inline-block;">
-    <li>Setup a new Supabase project using the CLI</li>
-    <li>Link it to our app</li>
-    <li>Setup environment variables</li>
-    <li>Run the DB migrations to configure the schema</li>
-  </ul>
-  <a href="https://youtu.be/YMEyNXP59Ss">
-    <img src="https://github.com/nolly-studio/ai-chatbot-supabase/blob/main/readme-video-thumbnail.png" width="85%" alt="YouTube Onboarding Video" />
-  </a>
-</div>
+The project keeps the Apache License 2.0 notice from Vercel
 
-</div>
+## Backend changes
 
+- Added `/api/health` for a basic service check
+- Replaced the template chat schema with advisor-specific tables
+- Added profiles with `role` and `is_allowed` access fields
+- Added separate conversations and ordered message history
+- Added Google sign-in through Supabase Auth
+- Added server checks for the session, account access and administrator role
+- Added backend routes for conversations and messages
+- Added duplicate-request protection for message retries
+- Added read-only Google Docs access for the prompt and reference document
+- Added a five-minute document cache with a last-valid-cache fallback
+- Added keyword selection for relevant reference text
+- Added OpenRouter for advisor responses
+- Restricted test models to `openrouter/free` and `:free` model values
+- Added daily message caps, daily token caps and per-minute rate limits
+- Added protected logs for completed, blocked and failed turns
+- Added token counts, estimated cost and model data to the turn logs
+- Added an administrator endpoint for usage and conversation review
+- Added safe error responses for invalid requests and service failures
+- Removed direct browser access to conversation and message tables
+- Added a temporary chat interface for backend tests
 
-## Getting Started
+## Backend flow
 
-### Quick Start Video Guide
+Supabase Auth creates the user session
 
-Watch our comprehensive onboarding video to quickly set up your development environment and understand the project structure: [Watch Tutorial](#)
+The `profiles` table controls application access and the administrator role
 
-### Prerequisites
+The message route checks the session, account access, ownership, duplicate request and usage limits
 
-Before you begin, ensure you have the following installed:
+The server loads the Google Docs content after the usage check
 
-- Node.js 18+
-- pnpm (`npm install -g pnpm`)
-- Git
-- A code editor (we recommend VS Code)
+The cache supplies the last valid content if Google Docs does not respond
 
-### Supabase Setup
+The grounding module selects reference text that matches the user message
 
-1. **Install the Supabase CLI**
-   Choose the installation method for your operating system:
+The server sends the private system message and conversation history to OpenRouter
 
-   - Mac:
-     ```bash
-     brew install supabase/tap/supabase
-     ```
-   - Windows (PowerShell):
-     ```powershell
-     scoop bucket add supabase https://github.com/supabase/scoop-bucket.git
-     scoop install supabase
-     ```
-   - Linux:
-     ```bash
-     brew install supabase/tap/supabase
-     ```
-   - NPM/Bun:
-     ```bash
-     npx supabase <command>
-     ```
+Database functions save the messages, usage totals and turn log in protected transactions
 
-2. **Create a Supabase Project**
+## Main routes
 
-   ```bash
-   # Create a new project
-   npx supabase projects create -i "ai-chatbot-supabase"
+- `GET /api/health` returns the service state
+- `GET /api/me` returns the signed-in account and profile
+- `GET /api/conversations` returns the user conversation list
+- `POST /api/conversations` creates a conversation
+- `GET /api/conversations/{id}/messages` returns ordered message history
+- `POST /api/conversations/{id}/messages` sends one advisor message
+- `GET /api/admin/docs-status` returns document cache status for an administrator
+- `GET /api/admin/usage` returns usage and turn data for an administrator
 
-   # Note: Save the project ID and database password shown after creation
-   ```
+## Database
 
-   > Your Organization ID can be found in the Supabase Dashboard URL after selecting an organization
+Current tables:
 
-3. **Link Your Project**
+- `profiles`
+- `conversations`
+- `messages`
+- `advisor_document_cache`
+- `usage_counters`
+- `advisor_turn_logs`
 
-   ```bash
-   # Initialize Supabase configuration
-   npx supabase init
+Current database functions:
 
-   # Link to your remote project
-   npx supabase link --project-ref your-project-id
-   ```
+- `set_updated_at`
+- `handle_new_auth_user`
+- `save_fixed_turn`
+- `begin_advisor_turn`
+- `complete_advisor_turn`
+- `fail_advisor_turn`
 
-   You'll need your project ID and database password from step 2.
+Apply the files in `supabase/migrations/` to a new Supabase project
 
-4. **Configure Environment Variables**
-   Create a `.env.local` file with the following variables:
+Do not apply files in `template-reference/template-migrations/`
 
-   ```bash
-   NEXT_PUBLIC_SUPABASE_URL=<api-url>
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
-   ```
+The current remote schema was applied through the Supabase SQL Editor
 
-   > Find these values in your Supabase project dashboard under Project Settings > API
+Reconcile its migration history before a future `supabase db push`
 
-5. **Initialize Database Schema**
+## Environment
 
-   ```bash
-   # Apply all migrations
-   supabase db push
+Use `.env.example` as the variable list
 
-   # Verify the schema
-   supabase db reset --dry-run
-   ```
+Keep the real values in `.env.local` during local work
 
-### Local Development
+Keep `.env.local` outside Git
 
-1. **Clone and Install**
+Server secrets:
 
-   ```bash
-   git clone https://github.com/your-username/ai-chatbot-supabase.git
-   cd ai-chatbot-supabase
-   pnpm install
-   ```
+- `SUPABASE_SECRET_KEY`
+- `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`
+- `OPENROUTER_API_KEY`
 
-2. **Start Development Server**
+Server settings:
 
-   ```bash
-   pnpm dev
-   ```
+- `GOOGLE_PROMPT_DOC_ID`
+- `GOOGLE_REFERENCE_DOC_ID`
+- `GOOGLE_DOC_CACHE_TTL_SECONDS`
+- `OPENROUTER_MODEL`
+- `ADVISOR_DAILY_MESSAGE_LIMIT`
+- `ADVISOR_DAILY_TOKEN_LIMIT`
+- `ADVISOR_REQUESTS_PER_MINUTE`
 
-   The application will be available at [http://localhost:3000](http://localhost:3000)
+Browser-safe settings:
 
-3. **Development Commands**
-   ```bash
-   pnpm build          # Build for production
-   pnpm start          # Start production server
-   pnpm lint          # Run ESLint
-   pnpm type-check    # Run TypeScript checks
-   ```
+- `NEXT_PUBLIC_SITE_URL`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
-### Troubleshooting
+## Local commands
 
-Common issues and solutions:
-
-- **Supabase Connection Issues**
-
-  - Verify your environment variables are correctly set
-  - Check if the database is active in Supabase dashboard
-
-- **Build Errors**
-  - Clear `.next` folder: `rm -rf .next`
-  - Clean install dependencies: `pnpm clean-install`
-
-For more help, open an issue.
-
-## Deploy with Vercel
-
-### Prerequisites
-
-- A [Vercel account](https://vercel.com/signup)
-- A [Supabase account](https://supabase.com/dashboard/sign-in)
-- An [OpenAI API key](https://platform.openai.com/api-keys)
-
-### Deployment Steps
-
-1. **Fork the Repository**
-
-   ```bash
-   https://github.com/your-username/ai-chatbot-supabase
-   ```
-
-2. **Configure Vercel Project**
-
-   - Go to [Vercel Dashboard](https://vercel.com/dashboard)
-   - Click "New Project"
-   - Import your forked repository
-   - Select "Next.js" as the framework
-
-3. **Set Environment Variables**
-   In your Vercel project settings, add the following environment variables:
+Install the packages:
 
 ```bash
-# Required
-NEXT_PUBLIC_SUPABASE_URL=           # From Supabase project settings
-NEXT_PUBLIC_SUPABASE_ANON_KEY=      # From Supabase project settings
-OPENAI_API_KEY=                     # Your OpenAI API key
+pnpm install
 ```
 
-4. **Configure Build Settings**
-   In your Vercel project settings:
+Start the development server:
 
-   - Build Command: `pnpm build`
-   - Output Directory: `.next`
-   - Install Command: `pnpm install`
+```bash
+pnpm dev
+```
 
-5. **Deploy**
-   - Click "Deploy"
-   - Vercel will automatically build and deploy your application
+Do the TypeScript check:
 
+```bash
+pnpm exec tsc --noEmit --incremental false
+```
+
+Create the production build:
+
+```bash
+pnpm build
+```
+
+## Current state
+
+- Branch: `backend-rebuild`
+- Backend build: passed
+- Backend tests: passed
+- Advisor persona: not selected
+- Prompt document: not final
+- Reference document: not final
+- Persona evaluation: deferred
+- Final user interface: outside this backend work
+- Deployment: not complete
+
+## Handoff record
+
+The backend handoff guide contains the full setup, API contracts, data structure and edit locations
+
+See `docs/BACKEND_HANDOFF.md`

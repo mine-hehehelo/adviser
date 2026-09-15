@@ -2,6 +2,7 @@ import 'server-only';
 
 import { docs_v1, google } from 'googleapis';
 
+import { HttpError } from '@/lib/server/errors';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 const CACHE_KEY = 'advisor-documents';
@@ -34,9 +35,7 @@ function getCacheTtlMilliseconds(): number {
   const seconds = Number(value);
 
   if (!Number.isFinite(seconds) || seconds <= 0) {
-    throw new Error(
-      'GOOGLE_DOC_CACHE_TTL_SECONDS must be a positive number'
-    );
+    throw new Error('GOOGLE_DOC_CACHE_TTL_SECONDS must be a positive number');
   }
 
   return seconds * 1000;
@@ -69,9 +68,7 @@ function getServiceAccountCredentials() {
       project_id: credentials.project_id,
     };
   } catch {
-    throw new Error(
-      'GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 is not valid'
-    );
+    throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 is not valid');
   }
 }
 
@@ -97,9 +94,7 @@ function extractDocumentText(
       }
 
       if (element.tableOfContents) {
-        return extractDocumentText(
-          element.tableOfContents.content ?? []
-        );
+        return extractDocumentText(element.tableOfContents.content ?? []);
       }
 
       return '';
@@ -148,19 +143,17 @@ async function saveCachedDocuments(
 ): Promise<void> {
   const admin = createAdminClient();
 
-  const { error } = await admin
-    .from('advisor_document_cache')
-    .upsert(
-      {
-        cache_key: CACHE_KEY,
-        prompt_text: promptText,
-        reference_text: referenceText,
-        fetched_at: fetchedAt,
-      },
-      {
-        onConflict: 'cache_key',
-      }
-    );
+  const { error } = await admin.from('advisor_document_cache').upsert(
+    {
+      cache_key: CACHE_KEY,
+      prompt_text: promptText,
+      reference_text: referenceText,
+      fetched_at: fetchedAt,
+    },
+    {
+      onConflict: 'cache_key',
+    }
+  );
 
   if (error) {
     throw new Error('Unable to update the advisor document cache');
@@ -190,9 +183,7 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
 
     const authentication = new google.auth.GoogleAuth({
       credentials,
-      scopes: [
-        'https://www.googleapis.com/auth/documents.readonly',
-      ],
+      scopes: ['https://www.googleapis.com/auth/documents.readonly'],
     });
 
     const service = google.docs({
@@ -200,9 +191,7 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
       auth: authentication,
     });
 
-    const promptDocumentId = requireEnvironmentVariable(
-      'GOOGLE_PROMPT_DOC_ID'
-    );
+    const promptDocumentId = requireEnvironmentVariable('GOOGLE_PROMPT_DOC_ID');
 
     const referenceDocumentId = requireEnvironmentVariable(
       'GOOGLE_REFERENCE_DOC_ID'
@@ -215,11 +204,7 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
 
     const fetchedAt = new Date().toISOString();
 
-    await saveCachedDocuments(
-      promptText,
-      referenceText,
-      fetchedAt
-    );
+    await saveCachedDocuments(promptText, referenceText, fetchedAt);
 
     return {
       promptText,
@@ -227,7 +212,7 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
       fetchedAt,
       source: 'google',
     };
-    } catch (error) {
+  } catch (error) {
     console.error(
       'Advisor document loading failed:',
       error instanceof Error ? error.message : 'Unknown error'
@@ -242,8 +227,6 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
       };
     }
 
-    throw new Error(
-      'Advisor documents are currently unavailable'
-    );
+    throw new HttpError(503, 'Advisor documents are currently unavailable');
   }
 }
