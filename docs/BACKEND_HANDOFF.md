@@ -9,8 +9,7 @@
 | Source template folder | `adviser` |
 | Work branch | `backend-rebuild` |
 | Source template commit | `476efe2` |
-| Latest backend commit | `d50d1c1` |
-| Git remote | Not set |
+| Git remote | `https://github.com/rajcasillano/adviser.git` |
 | Backend state | Production build passed |
 | Persona state | Not selected |
 | Evaluation state | Deferred |
@@ -78,8 +77,8 @@
 | 9A | `5752306` | Restricted test models | `lib/server/openrouter.ts` | Allowed `openrouter/free` and `:free` models |
 | 10 | `b111a8e` | Added usage controls | Usage files, route changes and migrations | Added caps, rate limits, logs and cost data |
 | 11 | `d50d1c1` | Added administrator usage access | `app/api/admin/usage/route.ts` | Added usage and conversation review data |
-| 12 | Not committed | Added reliability responses | Error, document and environment files | Added safe `400` and `503` responses |
-| 12A | Not committed | Removed direct browser data access | Access migration | Made the protected API the data path |
+| 12 | `4078918` | Added reliability responses | Error, document and environment files | Added safe `400` and `503` responses |
+| 12A | `4078918` | Removed direct browser data access | Access migration | Made the protected API the data path |
 
 ## Request flow
 
