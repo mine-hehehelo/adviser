@@ -5,6 +5,8 @@ import { docs_v1, google } from 'googleapis';
 import { HttpError } from '@/lib/server/errors';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { recordEvent, type EventContext } from './events';
+
 const CACHE_KEY = 'advisor-documents';
 
 type CacheRow = {
@@ -160,7 +162,9 @@ async function saveCachedDocuments(
   }
 }
 
-export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
+export async function loadAdvisorDocuments(
+  context?: EventContext
+): Promise<AdvisorDocuments> {
   const cachedDocuments = await readCachedDocuments();
   const cacheTtl = getCacheTtlMilliseconds();
 
@@ -169,6 +173,7 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
       Date.now() - new Date(cachedDocuments.fetched_at).getTime();
 
     if (cacheAge >= 0 && cacheAge < cacheTtl) {
+      await recordEvent('prompt_cache_hit', context);
       return {
         promptText: cachedDocuments.prompt_text,
         referenceText: cachedDocuments.reference_text,
@@ -178,6 +183,7 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
     }
   }
 
+  await recordEvent('prompt_cache_miss', context);
   try {
     const credentials = getServiceAccountCredentials();
 
@@ -218,6 +224,9 @@ export async function loadAdvisorDocuments(): Promise<AdvisorDocuments> {
       error instanceof Error ? error.message : 'Unknown error'
     );
 
+    await recordEvent('doc_fetch_error', context, {
+      fallback: !!cachedDocuments,
+    });
     if (cachedDocuments) {
       return {
         promptText: cachedDocuments.prompt_text,

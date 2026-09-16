@@ -38,3 +38,11 @@ yarn-error.log*
 .env*.local
 
 *.tsbuildinfo
+
+# Local evaluation evidence and private persona drafts
+docs/ADVISOR_CONTENT_PROPOSAL.md
+docs/IMPLEMENTATION_RESULTS.md
+docs/LIVE_EVALUATION.md
+docs/LIVE_EVALUATION_RESULTS.json
+tests/read-live-evaluation.cjs
+tests/check-grounding-evidence.cjs

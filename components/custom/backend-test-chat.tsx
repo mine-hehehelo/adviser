@@ -1,12 +1,17 @@
 'use client';
 
+
 import { useRouter } from 'next/navigation';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useSWRConfig } from 'swr';
 
 import { SidebarToggle } from '@/components/custom/sidebar-toggle';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  ChatRequestError,
+  parseChatResponse as parseResponse,
+} from '@/lib/chat-response';
 
 type Conversation = {
   id: string;
@@ -23,18 +28,6 @@ type SavedMessage = {
   created_at: string;
 };
 
-async function parseResponse<T>(response: Response): Promise<T> {
-  const body = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      body.error ?? `Request failed with status ${response.status}`
-    );
-  }
-
-  return body as T;
-}
-
 export function BackendTestChat({
   initialConversationId,
 }: {
@@ -48,6 +41,19 @@ export function BackendTestChat({
   const [isStarting, setIsStarting] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryUntil, setRetryUntil] = useState(0);
+  const [clock, setClock] = useState(Date.now());
+  const pending = useRef<{
+    id: string;
+    text: string;
+    conversation: string;
+  } | null>(null);
+  const retrySeconds = Math.max(0, Math.ceil((retryUntil - clock) / 1000));
+  useEffect(() => {
+    if (!retryUntil) return;
+    const timer = setInterval(() => setClock(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, [retryUntil]);
 
   useEffect(() => {
     let cancelled = false;
@@ -154,7 +160,7 @@ export function BackendTestChat({
 
     const text = input.trim();
 
-    if (!text || isSending) {
+    if (!text || isSending || isStarting || Date.now() < retryUntil) {
       return;
     }
 
@@ -168,6 +174,17 @@ export function BackendTestChat({
         activeConversationId = await createConversation(text.slice(0, 60));
       }
 
+      if (
+        !pending.current ||
+        pending.current.text !== text ||
+        pending.current.conversation !== activeConversationId
+      ) {
+        pending.current = {
+          id: crypto.randomUUID(),
+          text,
+          conversation: activeConversationId,
+        };
+      }
       const sendResponse = await fetch(
         `/api/conversations/${activeConversationId}/messages`,
         {
@@ -176,7 +193,7 @@ export function BackendTestChat({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            requestId: crypto.randomUUID(),
+            requestId: pending.current.id,
             text,
           }),
         }
@@ -192,6 +209,7 @@ export function BackendTestChat({
         messages: SavedMessage[];
       }>(historyResponse);
 
+      pending.current = null;
       setMessages(history.messages);
       setInput('');
       await mutate('/api/conversations');
@@ -200,10 +218,22 @@ export function BackendTestChat({
         router.replace(`/chat/${activeConversationId}`);
       }
     } catch (caughtError) {
+      if (caughtError instanceof ChatRequestError) {
+        if (caughtError.retryAfterSeconds) {
+          setClock(Date.now());
+          setRetryUntil(Date.now() + caughtError.retryAfterSeconds * 1000);
+        }
+        if (
+          caughtError.status === 429 ||
+          caughtError.code === 'previous_failed' ||
+          (caughtError.status < 500 && caughtError.code !== 'processing')
+        )
+          pending.current = null;
+      }
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : 'Could not send the message'
+          : 'Could not send the message. Your draft is saved; try again'
       );
     } finally {
       setIsSending(false);
@@ -216,12 +246,15 @@ export function BackendTestChat({
         <SidebarToggle />
 
         <div>
-          <div className="font-semibold">Advisor Console</div>
-          <div className="text-xs text-muted-foreground">Backend test mode</div>
+          <div className="font-semibold"><span aria-hidden="true">👎</span> DeInfluenceMe</div>
+          <div className="text-xs text-muted-foreground">
+            Your advisor workspace
+          </div>
         </div>
 
         <Button
           className="ml-auto"
+          disabled={isSending || isStarting}
           onClick={handleNewConversation}
           type="button"
           variant="outline"
@@ -240,7 +273,7 @@ export function BackendTestChat({
 
           {!isStarting && messages.length === 0 && (
             <p className="text-center text-muted-foreground">
-              Send a message to test the backend
+              What would you like help with today?
             </p>
           )}
 
@@ -267,7 +300,16 @@ export function BackendTestChat({
             </p>
           )}
 
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && (
+            <p role="alert" className="text-sm text-red-500">
+              {error}
+            </p>
+          )}
+          {retrySeconds > 0 && (
+            <p role="status" className="text-sm text-muted-foreground">
+              You can try again in {retrySeconds} seconds. Your draft is saved.
+            </p>
+          )}
         </div>
       </main>
 
@@ -288,8 +330,17 @@ export function BackendTestChat({
           value={input}
         />
 
-        <Button disabled={!input.trim() || isSending} type="submit">
-          {isSending ? 'Sending...' : 'Send'}
+        <Button
+          disabled={
+            !input.trim() || isSending || isStarting || retrySeconds > 0
+          }
+          type="submit"
+        >
+          {isSending
+            ? 'Sending...'
+            : retrySeconds > 0
+              ? `Wait ${retrySeconds}s`
+              : 'Send'}
         </Button>
       </form>
     </div>

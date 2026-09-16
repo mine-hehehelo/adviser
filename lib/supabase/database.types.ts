@@ -39,6 +39,28 @@ export type Database = {
   };
   public: {
     Tables: {
+      advisor_events: {
+        Row: {
+          id: string;
+          event_name: string;
+          user_id: string | null;
+          conversation_id: string | null;
+          request_id: string | null;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          event_name: string;
+          user_id?: string | null;
+          conversation_id?: string | null;
+          request_id?: string | null;
+          metadata?: Json;
+          created_at?: string;
+        };
+        Update: { event_name?: string; metadata?: Json };
+        Relationships: [];
+      };
       advisor_document_cache: {
         Row: {
           cache_key: string;
@@ -267,6 +289,25 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      reserve_advisor_tokens: {
+        Args: {
+          p_user_id: string;
+          p_conversation_id: string;
+          p_request_id: string;
+          p_token_budget: number;
+          p_daily_token_limit: number;
+        };
+        Returns: Json;
+      };
+      start_advisor_provider: {
+        Args: {
+          p_user_id: string;
+          p_conversation_id: string;
+          p_request_id: string;
+        };
+        Returns: undefined;
+      };
+
       begin_advisor_turn: {
         Args: {
           p_conversation_id: string;

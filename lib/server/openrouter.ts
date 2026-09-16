@@ -1,10 +1,11 @@
 import 'server-only';
-
 import { HttpError } from '@/lib/server/errors';
 
-const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+import { recordEvent, type EventContext } from './events';
+import { MAX_COMPLETION_TOKENS } from './token-budget';
 
-const MAX_COMPLETION_TOKENS = 500;
+
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
 export type OpenRouterMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -93,7 +94,8 @@ function readUsage(result: OpenRouterResponse): OpenRouterResult['usage'] {
 }
 
 export async function generateAdvisorReply(
-  messages: OpenRouterMessage[]
+  messages: OpenRouterMessage[],
+  context?: EventContext
 ): Promise<OpenRouterResult> {
   const { apiKey, model } = getOpenRouterConfiguration();
 
@@ -116,6 +118,7 @@ export async function generateAdvisorReply(
       signal: AbortSignal.timeout(60_000),
     });
   } catch (error) {
+    await recordEvent('provider_error', context, { kind: 'connection' });
     console.error(
       'OpenRouter connection failed:',
       error instanceof Error ? error.message : 'Unknown error'
@@ -125,23 +128,36 @@ export async function generateAdvisorReply(
   }
 
   if (!response.ok) {
+    await recordEvent('provider_error', context, {
+      kind: 'http',
+      status: response.status,
+    });
     console.error(`OpenRouter returned status ${response.status}`);
 
     if (response.status === 429) {
       throw new HttpError(
         429,
-        'The free advisor service is busy. Please try again shortly'
+        'The free advisor service is busy. Please try again shortly',
+        'provider_busy',
+        60
       );
     }
 
     throw new HttpError(502, 'The advisor service is temporarily unavailable');
   }
 
-  const result = (await response.json()) as OpenRouterResponse;
+  let result: OpenRouterResponse;
+  try {
+    result = await response.json();
+  } catch {
+    await recordEvent('provider_error', context, { kind: 'invalid_response' });
+    throw new HttpError(502, 'The advisor did not return a usable response');
+  }
 
   const reply = result.choices?.[0]?.message?.content?.trim();
 
   if (!reply) {
+    await recordEvent('provider_error', context, { kind: 'invalid_response' });
     throw new HttpError(502, 'The advisor did not return a usable response');
   }
 

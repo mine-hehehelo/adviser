@@ -4,6 +4,8 @@ import { requireAdmin } from '@/lib/server/auth';
 import { errorResponse, HttpError } from '@/lib/server/errors';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+export const dynamic = 'force-dynamic';
+
 const daySchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -151,46 +153,49 @@ export async function GET(request: Request) {
       }
     );
 
-    return Response.json({
-      day,
-      generatedAt: new Date().toISOString(),
-      totals,
+    return Response.json(
+      {
+        day,
+        generatedAt: new Date().toISOString(),
+        totals,
 
-      users: usageRows.map((row) => ({
-        ...getUser(row.user_id),
-        messagesToday: row.messages_today,
-        tokensToday: row.tokens_today,
-        estimatedCostUsd: row.est_spend_today,
-      })),
+        users: usageRows.map((row) => ({
+          ...getUser(row.user_id),
+          messagesToday: row.messages_today,
+          tokensToday: row.tokens_today,
+          estimatedCostUsd: row.est_spend_today,
+        })),
 
-      recentConversations: conversationRows.map((conversation) => ({
-        id: conversation.id,
-        title: conversation.title,
-        ...getUser(conversation.user_id),
-        createdAt: conversation.created_at,
-        updatedAt: conversation.updated_at,
-      })),
+        recentConversations: conversationRows.map((conversation) => ({
+          id: conversation.id,
+          title: conversation.title,
+          ...getUser(conversation.user_id),
+          createdAt: conversation.created_at,
+          updatedAt: conversation.updated_at,
+        })),
 
-      recentTurns: turnRows.map((turn) => ({
-        id: turn.id,
-        conversationId: turn.conversation_id,
-        requestId: turn.request_id,
-        ...getUser(turn.user_id),
-        status: turn.status,
-        blockReason: turn.block_reason,
-        errorCode: turn.error_code,
-        model: turn.model,
-        documentSource: turn.document_source,
-        promptTokens: turn.prompt_tokens,
-        completionTokens: turn.completion_tokens,
-        totalTokens: turn.total_tokens,
-        estimatedCostUsd: turn.est_cost_usd,
-        userInput: turn.user_input,
-        assistantResponse: turn.assistant_response,
-        createdAt: turn.created_at,
-        completedAt: turn.completed_at,
-      })),
-    });
+        recentTurns: turnRows.map((turn) => ({
+          id: turn.id,
+          conversationId: turn.conversation_id,
+          requestId: turn.request_id,
+          ...getUser(turn.user_id),
+          status: turn.status,
+          blockReason: turn.block_reason,
+          errorCode: turn.error_code,
+          model: turn.model,
+          documentSource: turn.document_source,
+          promptTokens: turn.prompt_tokens,
+          completionTokens: turn.completion_tokens,
+          totalTokens: turn.total_tokens,
+          estimatedCostUsd: turn.est_cost_usd,
+          userInput: turn.user_input,
+          assistantResponse: turn.assistant_response,
+          createdAt: turn.created_at,
+          completedAt: turn.completed_at,
+        })),
+      },
+      { headers: { 'Cache-Control': 'private, no-store' } }
+    );
   } catch (error) {
     return errorResponse(error);
   }

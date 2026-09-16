@@ -1,0 +1,44 @@
+const { PGlite } = require('@electric-sql/pglite');
+const fs=require('node:fs'); const assert=require('node:assert/strict');
+(async()=>{
+ const db=new PGlite();
+ await db.exec(`create schema auth; create schema extensions; create role anon; create role authenticated; create role service_role; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb); create function auth.uid() returns uuid language sql as 'select null::uuid';`);
+ for(const name of fs.readdirSync('supabase/migrations').filter(x=>x.endsWith('.sql')).sort()) {
+  let sql=fs.readFileSync('supabase/migrations/'+name,'utf8').replace('create extension if not exists pgcrypto with schema extensions;','');
+  await db.exec(sql);
+ }
+ const user='11111111-1111-4111-8111-111111111111',conv='22222222-2222-4222-8222-222222222222';
+ await db.query('insert into auth.users(id) values ($1)',[user]);
+ await db.query('insert into public.conversations(id,user_id) values ($1,$2)',[conv,user]);
+ const req=()=>require('node:crypto').randomUUID();
+ const begin=async(id,cap=100,rpm=100)=> (await db.query(`select public.begin_advisor_turn($1,$2,$3,'test', $4,10000,$5) as r`,[user,conv,id,cap,rpm])).rows[0].r;
+ const reserve=async(id,amount)=> (await db.query('select public.reserve_advisor_tokens($1,$2,$3,$4,10000) as r',[user,conv,id,amount])).rows[0].r;
+ const start=async(id)=>db.query('select public.start_advisor_provider($1,$2,$3)',[user,conv,id]);
+ const fail=async(id)=>db.query("select public.fail_advisor_turn($1,$2,$3,'test_error','cache')",[user,conv,id]);
+ const total=async()=>Number((await db.query('select tokens_today from usage_counters where user_id=$1',[user])).rows[0].tokens_today);
+ const a=req(),b=req(); await begin(a);await begin(b);
+ assert.equal((await reserve(a,7000)).allowed,true);
+ assert.equal((await reserve(b,4000)).allowed,false);
+ console.log('PASS overlapping reservations block overspend');
+ assert.equal((await begin(a)).duplicate,true);
+ await start(a);await fail(a);await fail(a);assert.equal(await total(),7000);
+ console.log('PASS uncertain provider failure charged exactly once and retries deduplicated');
+ const c=req();await begin(c);await reserve(c,2000);await fail(c);assert.equal(await total(),7000);
+ console.log('PASS failure before provider releases budget');
+ const d=req();await begin(d);await reserve(d,2000);await start(d);
+ await db.query("select public.complete_advisor_turn($1,$2,$3,'reply','test:free','cache',100,50,150,0)",[user,conv,d]);
+ assert.equal(await total(),7150);
+ await db.query("select public.complete_advisor_turn($1,$2,$3,'reply','test:free','cache',100,50,150,0)",[user,conv,d]);assert.equal(await total(),7150);
+ console.log('PASS actual completion usage replaces reservation exactly once');
+ const e=req();await begin(e);await reserve(e,2000);await start(e);
+ await db.query("select public.complete_advisor_turn($1,$2,$3,'reply','test:free','cache',null,null,null,0)",[user,conv,e]);assert.equal(await total(),9150);
+ console.log('PASS missing provider usage charged conservatively');
+ assert.equal((await begin(req(),1)).reason,'message_cap');assert.equal((await begin(req(),100,1)).reason,'rate_limit');
+ console.log('PASS message and rate caps still enforced');
+ const events=(await db.query('select event_name from advisor_events')).rows.map(x=>x.event_name);
+ for(const name of ['message_sent','llm_call_completed','request_blocked','usage_uncertain','turn_failed']) assert.ok(events.includes(name));
+ assert.equal((await db.query("select has_table_privilege('authenticated','public.advisor_events','SELECT') as allowed")).rows[0].allowed,false);
+ assert.equal((await db.query("select has_function_privilege('authenticated','public.reserve_advisor_tokens(uuid,uuid,uuid,bigint,bigint)','EXECUTE') as allowed")).rows[0].allowed,false);
+ console.log('PASS durable event triggers and browser privilege isolation');
+ await db.close();
+})().catch(e=>{console.error(e);process.exitCode=1});

@@ -6,6 +6,8 @@ import {
 } from '@/lib/server/google-docs';
 import { findRelevantGrounding } from '@/lib/server/grounding';
 
+import type { EventContext } from './events';
+
 export type AdvisorPrompt = {
   systemPrompt: string;
   documentSource: AdvisorDocuments['source'];
@@ -13,9 +15,10 @@ export type AdvisorPrompt = {
 };
 
 export async function loadAdvisorPrompt(
-  userMessage: string
+  userMessage: string,
+  context?: EventContext
 ): Promise<AdvisorPrompt> {
-  const documents = await loadAdvisorDocuments();
+  const documents = await loadAdvisorDocuments(context);
 
   const groundingExcerpt = findRelevantGrounding(
     documents.referenceText,

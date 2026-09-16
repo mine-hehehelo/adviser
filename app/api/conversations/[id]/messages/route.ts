@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+
 import {
   loadAdvisorPrompt,
   type AdvisorPrompt,
@@ -10,6 +11,7 @@ import {
   generateAdvisorReply,
   type OpenRouterMessage,
 } from '@/lib/server/openrouter';
+import { estimateTokenBudget } from '@/lib/server/token-budget';
 import { getUsageLimits } from '@/lib/server/usage-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -37,8 +39,8 @@ function createLimitResponse(
   retryAfterSeconds?: number | null
 ) {
   const messages: Record<LimitReason, string> = {
-    message_cap: 'You have reached today’s message limit',
-    token_cap: 'You have reached today’s usage limit',
+    message_cap: 'You have reached today’s message limit. It resets at midnight (Manila time)',
+    token_cap: 'There is not enough available usage for this message. Try a shorter conversation or return after midnight (Manila time)',
     rate_limit: 'Too many requests. Please wait before trying again',
   };
 
@@ -219,12 +221,18 @@ export async function POST(request: Request, context: RouteContext) {
       }
 
       if (beginTurn.status === 'processing') {
-        throw new HttpError(409, 'This message is already being processed');
+        throw new HttpError(
+          409,
+          'This message is already being processed',
+          'processing',
+          5
+        );
       }
 
       throw new HttpError(
         409,
-        'This request previously failed. Send it again with a new request ID'
+        'The previous attempt failed. You can send your message again',
+        'previous_failed'
       );
     }
 
@@ -248,7 +256,12 @@ export async function POST(request: Request, context: RouteContext) {
     try {
       // Load the private system prompt and relevant reference excerpt
 
-      const advisorPrompt = await loadAdvisorPrompt(input.text);
+      const eventContext = {
+        userId: user.id,
+        conversationId: id,
+        requestId: input.requestId,
+      };
+      const advisorPrompt = await loadAdvisorPrompt(input.text, eventContext);
 
       documentSource = advisorPrompt.documentSource;
 
@@ -273,7 +286,31 @@ export async function POST(request: Request, context: RouteContext) {
 
       // Request the advisor response
 
-      const completion = await generateAdvisorReply(modelMessages);
+      const identity = {
+        p_user_id: user.id,
+        p_conversation_id: id,
+        p_request_id: input.requestId,
+      };
+      const { data: reservation, error: reservationError } = await admin.rpc(
+        'reserve_advisor_tokens',
+        {
+          ...identity,
+          p_token_budget: estimateTokenBudget(modelMessages),
+          p_daily_token_limit: limits.dailyTokenLimit,
+        }
+      );
+      if (reservationError) throw reservationError;
+      if (!z.object({ allowed: z.boolean() }).parse(reservation).allowed)
+        return createLimitResponse('token_cap');
+      const { error: startError } = await admin.rpc(
+        'start_advisor_provider',
+        identity
+      );
+      if (startError) throw startError;
+      const completion = await generateAdvisorReply(
+        modelMessages,
+        eventContext
+      );
 
       // Save the messages, usage and completed status together
 

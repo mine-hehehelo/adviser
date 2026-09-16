@@ -1,6 +1,8 @@
 'use client';
 
 import { User } from '@supabase/supabase-js';
+import { ShieldCheck } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useSWRConfig } from 'swr';
@@ -21,7 +23,13 @@ import {
 } from '@/components/ui/sidebar';
 import { BetterTooltip } from '@/components/ui/tooltip';
 
-export function AppSidebar({ user }: { user: User | null }) {
+export function AppSidebar({
+  user,
+  isAdmin = false,
+}: {
+  user: User | null;
+  isAdmin?: boolean;
+}) {
   const router = useRouter();
   const { setOpenMobile } = useSidebar();
 
@@ -80,7 +88,7 @@ export function AppSidebar({ user }: { user: User | null }) {
               className="flex flex-row gap-3 items-center"
             >
               <span className="text-lg font-semibold px-2 hover:bg-muted rounded-md cursor-pointer">
-                Advisor Console
+                <span aria-hidden="true">👎</span> DeInfluenceMe
               </span>
             </div>
             <BetterTooltip content="New conversation" align="start">
@@ -102,6 +110,16 @@ export function AppSidebar({ user }: { user: User | null }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="gap-0">
+        {isAdmin && (
+          <Link
+            href="/admin"
+            onClick={() => setOpenMobile(false)}
+            className="flex items-center gap-2 rounded-md px-4 py-3 text-sm hover:bg-muted"
+          >
+            <ShieldCheck size={16} />
+            Admin view
+          </Link>
+        )}
         {user && (
           <SidebarGroup>
             <SidebarGroupContent>
