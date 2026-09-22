@@ -34,7 +34,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const { user } = await requireAllowedUser();
-    const body = await request.json().catch(() => ({}));
+    const body = await request.json();
     const input = createConversationSchema.parse(body);
     const admin = createAdminClient();
 

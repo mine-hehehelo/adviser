@@ -14,8 +14,7 @@ New registrations automatically receive ordinary chat access after authenticatio
 
 ```sh
 pnpm build
-node --test tests/admin-access.test.cjs tests/robustness.test.cjs
-node --test tests/signup-access.test.cjs
+node --test tests/admin-access.test.cjs tests/conversation-api.test.cjs tests/legacy-gate.test.cjs tests/robustness.test.cjs tests/signup-access.test.cjs
 node tests/budget-database.test.cjs
 ```
 

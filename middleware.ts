@@ -1,8 +1,24 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 import { updateSession } from '@/lib/supabase/middleware';
 
+const retiredTemplateApis = new Set([
+  '/api/chat',
+  '/api/document',
+  '/api/files/upload',
+  '/api/history',
+  '/api/suggestions',
+  '/api/vote',
+]);
+
 export async function middleware(request: NextRequest) {
+  if (retiredTemplateApis.has(request.nextUrl.pathname)) {
+    return NextResponse.json(
+      { error: 'This template endpoint is no longer available' },
+      { status: 410 }
+    );
+  }
+
   return await updateSession(request);
 }
 
