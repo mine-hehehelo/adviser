@@ -21,6 +21,7 @@ The project keeps the Apache License 2.0 notice from Vercel
 - Added `/api/health` for a basic service check
 - Replaced the template chat schema with advisor-specific tables
 - Added profiles with `role` and `is_allowed` access fields
+- New registrations receive ordinary chat access; existing account blocks remain effective
 - Added separate conversations and ordered message history
 - Added Google sign-in through Supabase Auth
 - Added server checks for the session, account access and administrator role
@@ -28,7 +29,7 @@ The project keeps the Apache License 2.0 notice from Vercel
 - Added duplicate-request protection for message retries
 - Added read-only Google Docs access for the prompt and reference document
 - Added a five-minute document cache with a last-valid-cache fallback
-- Added keyword selection for relevant reference text
+- Added full reference-document grounding without keyword selection
 - Added OpenRouter for advisor responses
 - Restricted test models to `openrouter/free` and `:free` model values
 - Added daily message caps, daily token caps and per-minute rate limits
@@ -38,6 +39,7 @@ The project keeps the Apache License 2.0 notice from Vercel
 - Added safe error responses for invalid requests and service failures
 - Removed direct browser access to conversation and message tables
 - Added a temporary chat interface for backend tests
+- Retired the template API endpoints from the advisor application
 
 ## Backend flow
 
@@ -51,9 +53,11 @@ The server loads the Google Docs content after the usage check
 
 The cache supplies the last valid content if Google Docs does not respond
 
-The grounding module selects reference text that matches the user message
+The server includes the complete short reference document in the private system message
 
 The server sends the private system message and conversation history to OpenRouter
+
+Older template API paths return HTTP 410 so they cannot bypass advisor limits
 
 Database functions save the messages, usage totals and turn log in protected transactions
 
@@ -78,6 +82,7 @@ Current tables:
 - `advisor_document_cache`
 - `usage_counters`
 - `advisor_turn_logs`
+- `advisor_events`
 
 Current database functions:
 
@@ -87,6 +92,8 @@ Current database functions:
 - `begin_advisor_turn`
 - `complete_advisor_turn`
 - `fail_advisor_turn`
+- `reserve_advisor_tokens`
+- `start_advisor_provider`
 
 Apply the files in `supabase/migrations/` to a new Supabase project
 
@@ -157,12 +164,13 @@ pnpm build
 - Branch: `backend-rebuild`
 - Backend build: passed
 - Backend tests: passed
+- Automated tests: saved in `tests/`; run the commands in `docs/DEPLOYMENT.md`
 - Advisor persona: not selected
 - Prompt document: not final
 - Reference document: not final
 - Persona evaluation: deferred
 - Final user interface: outside this backend work
-- Deployment: not complete
+- Deployment: configured for the production `backend-rebuild` branch; live services require separate verification
 
 ## Handoff record
 

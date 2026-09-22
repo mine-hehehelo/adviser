@@ -8,9 +8,7 @@ export async function GET() {
   try {
     await requireAdmin();
 
-    const advisorPrompt = await loadAdvisorPrompt(
-      'Test the advisor document connection'
-    );
+    const advisorPrompt = await loadAdvisorPrompt();
 
     return Response.json({
       ok: true,

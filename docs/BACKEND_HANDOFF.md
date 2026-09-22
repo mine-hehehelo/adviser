@@ -43,7 +43,7 @@
 | Persona prompt | Product team | Deferred |
 | Reference document | Product team | Deferred |
 | Persona evaluation | Product team | Deferred |
-| Deployment | Project team | Deferred |
+| Deployment | Project team | Configured; see `docs/DEPLOYMENT.md` |
 
 ## Source template
 
@@ -56,9 +56,12 @@
 | Chat storage | `chats` and template `messages` data | Replaced |
 | Chat route | `app/(chat)/api/chat/route.ts` | Obsolete for the rebuild |
 | Chat component | `components/custom/chat.tsx` | Obsolete for the rebuild |
-| Database code | `db/` and template Supabase types | Obsolete for the rebuild |
+| Database code | Old chat data helpers and template types | Obsolete for the advisor route; `db/auth.ts` still supports email authentication |
 | Extra functions | Files, documents, suggestions and votes | Outside the advisor scope |
 | Template migrations | 12 migration files | Moved to `template-reference/template-migrations/` |
+
+The template's old `/api/chat`, document, history, suggestion, vote, and upload
+paths return HTTP 410. The active advisor uses the new conversation APIs.
 
 ## Backend change record
 
@@ -72,7 +75,7 @@
 | 5 | `8b2ff7f` | Added conversation routes | `app/api/conversations/route.ts` | Added conversation list and create actions |
 | 6 | `8b2ff7f` | Added message routes | Message route and database function | Added history, message save and duplicate protection |
 | 7 | `bd38209` | Added the backend test interface | Test chat and sidebar files | Added basic backend access for tests |
-| 8 | `9f7b0fe` | Added Google Docs access | Document, cache and grounding files | Added prompt load, cache and keyword selection |
+| 8 | `9f7b0fe` | Added Google Docs access | Document and reference files | Added prompt load and cache; current code includes the full short reference |
 | 9 | `ad60414` | Added OpenRouter | Model client and message route | Replaced the temporary response |
 | 9A | `5752306` | Restricted test models | `lib/server/openrouter.ts` | Allowed `openrouter/free` and `:free` models |
 | 10 | `b111a8e` | Added usage controls | Usage files, route changes and migrations | Added caps, rate limits, logs and cost data |
@@ -105,7 +108,7 @@
 8. Call `begin_advisor_turn`
 9. Block the request if a limit applies
 10. Load the prompt and reference documents
-11. Select the reference text for the user message
+11. Include the complete short reference document
 12. Assemble the system message on the server
 13. Send the request to OpenRouter
 14. Call `complete_advisor_turn`
@@ -113,6 +116,11 @@
 16. Update the usage counter
 17. Update the turn log
 18. Return the assistant reply
+
+The history route reads ordered messages in 500-row database pages so a long
+stored conversation is not silently cut off by the default query row limit.
+The complete history is also sent to the model on a new turn; very long threads
+can exhaust the token budget or the model context window.
 
 ### Failure flow
 
@@ -147,7 +155,6 @@
 | `lib/server/auth.ts` | Session, account and administrator checks |
 | `lib/server/errors.ts` | Safe HTTP responses |
 | `lib/server/google-docs.ts` | Google Docs load and cache logic |
-| `lib/server/grounding.ts` | Keyword selection and text chunks |
 | `lib/server/advisor-docs.ts` | Private system-message assembly |
 | `lib/server/openrouter.ts` | OpenRouter request and usage data |
 | `lib/server/usage-limits.ts` | Limit values from the environment |
@@ -359,6 +366,10 @@ IMPORTANT: Read conversation and message data through the protected API
 
 ### Allow a user
 
+New registrations receive ordinary chat access by default after migration
+`20260922160000_enable_chat_for_new_users.sql`. Existing blocked accounts remain
+blocked. Use this operation only when restoring access to a blocked account.
+
 1. Open **Supabase Dashboard**
 
 2. Open **SQL Editor**
@@ -531,7 +542,7 @@ Valid `documentSource` values:
 | Item | Edit location | Code change | Deployment |
 |---|---|---|---|
 | Advisor role | Prompt Google Doc | None | None |
-| Advisor limits | Prompt Google Doc | None | None |
+| Advisor usage limits | Server environment | None | Restart or redeploy |
 | Response format | Prompt Google Doc | None | None |
 | Voice rules | Reference Google Doc | None | None |
 | Approved facts | Reference Google Doc | None | None |
@@ -557,14 +568,13 @@ Valid `documentSource` values:
 - Required response patterns
 - Prohibited claims
 
-## Grounding controls
+## Reference grounding
 
-| Setting | File | Current value |
-|---|---|---|
-| Maximum chunk size | `lib/server/grounding.ts` | `1000` characters |
-| Maximum selected chunks | `lib/server/grounding.ts` | `2` |
-| Stop words | `lib/server/grounding.ts` | `STOP_WORDS` set |
-| No keyword match | `lib/server/grounding.ts` | First chunk |
+The complete short reference document is included in the private system
+message for each request. There is no keyword matching or chunk selection.
+Longer reference documents increase the reserved token budget and may cause
+the request to hit the daily token cap. Keep the document within the PRD's
+one-to-three-page scope.
 
 ## OpenRouter setup
 
@@ -994,8 +1004,7 @@ if (!response.ok) {
 | Free model route | `OPENROUTER_MODEL` |
 | Model temperature | `lib/server/openrouter.ts` |
 | Output token limit | `lib/server/openrouter.ts` |
-| Grounding chunk size | `lib/server/grounding.ts` |
-| Grounding chunk count | `lib/server/grounding.ts` |
+| Reference content | Reference Google Doc and `lib/server/advisor-docs.ts` |
 | API request rules | Applicable file in `app/api/` |
 | Authentication rules | `lib/server/auth.ts` |
 | Database structure | A new file in `supabase/migrations/` |

@@ -15,6 +15,40 @@ import { estimateTokenBudget } from '@/lib/server/token-budget';
 import { getUsageLimits } from '@/lib/server/usage-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import type { Database } from '@/lib/supabase/database.types';
+
+const conversationIdSchema = z.string().uuid();
+const HISTORY_PAGE_SIZE = 500;
+type SavedMessage = Pick<
+  Database['public']['Tables']['messages']['Row'],
+  'id' | 'request_id' | 'sequence' | 'role' | 'content' | 'status' | 'created_at'
+>;
+
+async function loadConversationMessages(
+  admin: ReturnType<typeof createAdminClient>,
+  conversationId: string,
+  onlyCompleted = false
+): Promise<SavedMessage[]> {
+  const messages: SavedMessage[] = [];
+
+  for (let offset = 0; ; offset += HISTORY_PAGE_SIZE) {
+    const baseQuery = admin
+      .from('messages')
+      .select('id, request_id, sequence, role, content, status, created_at')
+      .eq('conversation_id', conversationId);
+    const query = onlyCompleted
+      ? baseQuery.eq('status', 'completed')
+      : baseQuery;
+    const { data, error } = await query
+      .order('sequence', { ascending: true })
+      .range(offset, offset + HISTORY_PAGE_SIZE - 1);
+
+    if (error) throw error;
+    messages.push(...(data ?? []));
+    if (!data || data.length < HISTORY_PAGE_SIZE) return messages;
+  }
+}
+
 const sendMessageSchema = z.object({
   requestId: z.string().uuid(),
   text: z.string().trim().min(1).max(4000),
@@ -73,29 +107,22 @@ type RouteContext = {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { user } = await requireAllowedUser();
-    const { id } = await context.params;
+    const id = conversationIdSchema.parse((await context.params).id);
     const admin = createAdminClient();
 
-    const { data: conversation } = await admin
+    const { data: conversation, error: conversationError } = await admin
       .from('conversations')
       .select('id, title, user_id')
       .eq('id', id)
       .eq('user_id', user.id)
       .maybeSingle();
 
+    if (conversationError) throw conversationError;
     if (!conversation) {
       throw new HttpError(404, 'Conversation was not found');
     }
 
-    const { data: messages, error } = await admin
-      .from('messages')
-      .select('id, request_id, sequence, role, content, status, created_at')
-      .eq('conversation_id', id)
-      .order('sequence', { ascending: true });
-
-    if (error) {
-      throw error;
-    }
+    const messages = await loadConversationMessages(admin, id);
 
     return Response.json({
       conversation,
@@ -109,7 +136,7 @@ export async function GET(_request: Request, context: RouteContext) {
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { user } = await requireAllowedUser();
-    const { id } = await context.params;
+    const id = conversationIdSchema.parse((await context.params).id);
     const input = sendMessageSchema.parse(await request.json());
     const admin = createAdminClient();
 
@@ -151,6 +178,14 @@ export async function POST(request: Request, context: RouteContext) {
     );
 
     if (existingAssistantMessage) {
+      if (!existingUserMessage || existingUserMessage.content !== input.text) {
+        throw new HttpError(
+          409,
+          'This request ID was already used for a different message',
+          'request_id_conflict'
+        );
+      }
+
       return Response.json({
         requestId: input.requestId,
         reply: existingAssistantMessage.content,
@@ -164,16 +199,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     // Load previous messages so the model understands the conversation
 
-    const { data: history, error: historyError } = await admin
-      .from('messages')
-      .select('role, content, sequence')
-      .eq('conversation_id', id)
-      .eq('status', 'completed')
-      .order('sequence', { ascending: true });
-
-    if (historyError) {
-      throw historyError;
-    }
+    const history = await loadConversationMessages(admin, id, true);
 
     // Check and reserve the user's usage before external API work
 
@@ -201,6 +227,22 @@ export async function POST(request: Request, context: RouteContext) {
     // Handle a request ID that has already been used
 
     if (beginTurn.duplicate) {
+      const { data: existingTurn, error: existingTurnError } = await admin
+        .from('advisor_turn_logs')
+        .select('user_input')
+        .eq('user_id', user.id)
+        .eq('conversation_id', id)
+        .eq('request_id', input.requestId)
+        .single();
+      if (existingTurnError) throw existingTurnError;
+      if (existingTurn.user_input !== input.text) {
+        throw new HttpError(
+          409,
+          'This request ID was already used for a different message',
+          'request_id_conflict'
+        );
+      }
+
       if (beginTurn.status === 'completed' && beginTurn.reply) {
         return Response.json({
           requestId: input.requestId,
@@ -254,14 +296,14 @@ export async function POST(request: Request, context: RouteContext) {
     let documentSource: AdvisorPrompt['documentSource'] | null = null;
 
     try {
-      // Load the private system prompt and relevant reference excerpt
+      // Load the private instructions and complete reference document
 
       const eventContext = {
         userId: user.id,
         conversationId: id,
         requestId: input.requestId,
       };
-      const advisorPrompt = await loadAdvisorPrompt(input.text, eventContext);
+      const advisorPrompt = await loadAdvisorPrompt(eventContext);
 
       documentSource = advisorPrompt.documentSource;
 
