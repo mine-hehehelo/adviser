@@ -8,13 +8,14 @@
 Pushes to `backend-rebuild` trigger production builds. Other branches create previews.
 Environment settings live in Vercel; never commit real credentials. `.env.example` lists the required names. Supabase retains the local callback and allows the production `/auth/callback` URL.
 
-The application still requires approved accounts. Admin tools require an approved profile with the `admin` role, checked on the server.
+New registrations automatically receive ordinary chat access after authentication. Apply `supabase/migrations/20260922160000_enable_chat_for_new_users.sql` to enable this default. Existing access flags are preserved; setting `profiles.is_allowed = false` still blocks an account. Admin tools additionally require the `admin` role, checked on the server. Email confirmation, conversation ownership, and usage limits still apply.
 
 ## Validation
 
 ```sh
 pnpm build
 node --test tests/admin-access.test.cjs tests/robustness.test.cjs
+node --test tests/signup-access.test.cjs
 node tests/budget-database.test.cjs
 ```
 
