@@ -4,8 +4,6 @@ import { User } from '@supabase/supabase-js';
 import { ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { useSWRConfig } from 'swr';
 
 import { PlusIcon } from '@/components/custom/icons';
 import { SidebarHistory } from '@/components/custom/sidebar-history';
@@ -33,45 +31,9 @@ export function AppSidebar({
   const router = useRouter();
   const { setOpenMobile } = useSidebar();
 
-  const { mutate } = useSWRConfig();
-  const [isCreating, setIsCreating] = useState(false);
-
-  async function createConversation() {
-    if (isCreating) {
-      return;
-    }
-
-    setIsCreating(true);
-
-    try {
-      const response = await fetch('/api/conversations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: 'New advisor conversation',
-        }),
-      });
-
-      const body = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          body.error ?? `Could not create conversation (${response.status})`
-        );
-      }
-
-      await mutate('/api/conversations');
-
-      setOpenMobile(false);
-      router.push(`/chat/${body.conversation.id}`);
-      router.refresh();
-    } catch (error) {
-      console.error('Could not create conversation:', error);
-    } finally {
-      setIsCreating(false);
-    }
+  function openNewConversation() {
+    setOpenMobile(false);
+    router.push(`/?draft=${crypto.randomUUID()}`);
   }
 
   return (
@@ -95,8 +57,7 @@ export function AppSidebar({
               <Button
                 variant="ghost"
                 className="p-2 h-fit"
-                onClick={createConversation}
-                disabled={isCreating}
+                onClick={openNewConversation}
               >
                 <PlusIcon />
               </Button>

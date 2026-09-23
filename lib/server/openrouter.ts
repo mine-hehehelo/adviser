@@ -4,7 +4,6 @@ import { HttpError } from '@/lib/server/errors';
 import { recordEvent, type EventContext } from './events';
 import { MAX_COMPLETION_TOKENS } from './token-budget';
 
-
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
 export type OpenRouterMessage = {
@@ -37,6 +36,16 @@ type OpenRouterResponse = {
     cost?: number;
   };
 };
+
+function cleanAdvisorReply(content: string): string {
+  return content
+    .trim()
+    .replace(
+      /^(?:(?:user|assistant|input|output)\s+)?safety\s*:\s*(?:safe|unsafe|unknown|allowed|blocked)[.!]?[ \t]*(?:\r?\n|$)/i,
+      ''
+    )
+    .trim();
+}
 
 function getOpenRouterConfiguration() {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
@@ -154,7 +163,8 @@ export async function generateAdvisorReply(
     throw new HttpError(502, 'The advisor did not return a usable response');
   }
 
-  const reply = result.choices?.[0]?.message?.content?.trim();
+  const content = result.choices?.[0]?.message?.content;
+  const reply = typeof content === 'string' ? cleanAdvisorReply(content) : '';
 
   if (!reply) {
     await recordEvent('provider_error', context, { kind: 'invalid_response' });
