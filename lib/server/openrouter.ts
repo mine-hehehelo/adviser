@@ -41,7 +41,7 @@ function cleanAdvisorReply(content: string): string {
   return content
     .trim()
     .replace(
-      /^(?:(?:user|assistant|input|output)\s+)?safety\s*:\s*(?:safe|unsafe|unknown|allowed|blocked)[.!]?[ \t]*(?:\r?\n|$)/i,
+      /^(?:(?:user|assistant|input|output|response)\s+)?safety\s*:\s*(?:safe|unsafe|unknown|allowed|blocked)[.!]?[ \t]*(?:\r?\n|$)/i,
       ''
     )
     .trim();
