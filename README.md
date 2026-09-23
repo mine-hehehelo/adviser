@@ -26,6 +26,8 @@ The project keeps the Apache License 2.0 notice from Vercel
 - Added Google sign-in through Supabase Auth
 - Added server checks for the session, account access and administrator role
 - Added backend routes for conversations and messages
+- Added a delete-chat route that removes messages and redacts turn text while retaining usage totals
+- Started new chats as blank drafts and showed a sent-message bubble while the advisor responds
 - Added duplicate-request protection for message retries
 - Added read-only Google Docs access for the prompt and reference document
 - Added a five-minute document cache with a last-valid-cache fallback
@@ -67,6 +69,7 @@ Database functions save the messages, usage totals and turn log in protected tra
 - `GET /api/me` returns the signed-in account and profile
 - `GET /api/conversations` returns the user conversation list
 - `POST /api/conversations` creates a conversation
+- `DELETE /api/conversations/{id}` removes an owned conversation after active processing ends
 - `GET /api/conversations/{id}/messages` returns ordered message history
 - `POST /api/conversations/{id}/messages` sends one advisor message
 - `GET /api/admin/docs-status` returns document cache status for an administrator
@@ -94,6 +97,7 @@ Current database functions:
 - `fail_advisor_turn`
 - `reserve_advisor_tokens`
 - `start_advisor_provider`
+- `delete_advisor_conversation`
 
 Apply the files in `supabase/migrations/` to a new Supabase project
 

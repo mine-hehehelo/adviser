@@ -1,6 +1,5 @@
 'use client';
 
-
 import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useSWRConfig } from 'swr';
@@ -37,6 +36,10 @@ export function BackendTestChat({
   const { mutate } = useSWRConfig();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<SavedMessage[]>([]);
+  const [pendingMessage, setPendingMessage] = useState<{
+    id: string;
+    text: string;
+  } | null>(null);
   const [input, setInput] = useState('');
   const [isStarting, setIsStarting] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -48,6 +51,7 @@ export function BackendTestChat({
     text: string;
     conversation: string;
   } | null>(null);
+  const inFlight = useRef(false);
   const retrySeconds = Math.max(0, Math.ceil((retryUntil - clock) / 1000));
   useEffect(() => {
     if (!retryUntil) return;
@@ -60,26 +64,14 @@ export function BackendTestChat({
 
     async function loadConversation() {
       try {
-        let selectedConversationId = initialConversationId ?? null;
-
-        if (!selectedConversationId) {
-          const response = await fetch('/api/conversations');
-
-          const result = await parseResponse<{
-            conversations: Conversation[];
-          }>(response);
-
-          selectedConversationId = result.conversations[0]?.id ?? null;
-        }
-
-        if (!selectedConversationId || cancelled) {
+        if (!initialConversationId || cancelled) {
           setConversationId(null);
           setMessages([]);
           return;
         }
 
         const historyResponse = await fetch(
-          `/api/conversations/${selectedConversationId}/messages`
+          `/api/conversations/${initialConversationId}/messages`
         );
 
         const history = await parseResponse<{
@@ -87,7 +79,7 @@ export function BackendTestChat({
         }>(historyResponse);
 
         if (!cancelled) {
-          setConversationId(selectedConversationId);
+          setConversationId(initialConversationId);
           setMessages(history.messages);
         }
       } catch (caughtError) {
@@ -129,30 +121,13 @@ export function BackendTestChat({
     }>(response);
 
     setConversationId(result.conversation.id);
-    await mutate('/api/conversations');
+    void mutate('/api/conversations').catch(() => {});
 
     return result.conversation.id;
   }
 
-  async function handleNewConversation() {
-    setError(null);
-
-    try {
-      const newConversationId = await createConversation(
-        'New advisor conversation'
-      );
-
-      setMessages([]);
-      setInput('');
-
-      router.push(`/chat/${newConversationId}`);
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : 'Could not create a conversation'
-      );
-    }
+  function handleNewConversation() {
+    router.push(`/?draft=${crypto.randomUUID()}`);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -160,61 +135,111 @@ export function BackendTestChat({
 
     const text = input.trim();
 
-    if (!text || isSending || isStarting || Date.now() < retryUntil) {
+    if (!text || inFlight.current || isStarting || Date.now() < retryUntil) {
       return;
     }
 
+    inFlight.current = true;
     setIsSending(true);
     setError(null);
+    const requestId =
+      pending.current?.text === text &&
+      pending.current.conversation === conversationId
+        ? pending.current.id
+        : crypto.randomUUID();
+    setPendingMessage({ id: requestId, text });
+    setInput('');
 
     try {
       let activeConversationId = conversationId;
 
       if (!activeConversationId) {
-        activeConversationId = await createConversation(text.slice(0, 60));
+        activeConversationId = await createConversation(
+          text.replace(/\s+/g, ' ').slice(0, 60)
+        );
       }
 
-      if (
-        !pending.current ||
-        pending.current.text !== text ||
-        pending.current.conversation !== activeConversationId
-      ) {
+      pending.current = {
+        id: requestId,
+        text,
+        conversation: activeConversationId,
+      };
+      const send = async (id: string) => {
+        const response = await fetch(
+          `/api/conversations/${activeConversationId}/messages`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestId: id, text }),
+          }
+        );
+        return parseResponse<{ requestId: string; reply: string }>(response);
+      };
+
+      let completion;
+      try {
+        completion = await send(requestId);
+      } catch (caughtError) {
+        if (
+          !(caughtError instanceof ChatRequestError) ||
+          caughtError.code !== 'previous_failed'
+        ) {
+          throw caughtError;
+        }
+        // The original attempt is known to have failed; one new attempt is safe.
+        const freshId = crypto.randomUUID();
         pending.current = {
-          id: crypto.randomUUID(),
+          id: freshId,
           text,
           conversation: activeConversationId,
         };
+        setPendingMessage({ id: freshId, text });
+        completion = await send(freshId);
       }
-      const sendResponse = await fetch(
-        `/api/conversations/${activeConversationId}/messages`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            requestId: pending.current.id,
-            text,
-          }),
-        }
-      );
-
-      await parseResponse(sendResponse);
-
-      const historyResponse = await fetch(
-        `/api/conversations/${activeConversationId}/messages`
-      );
-
-      const history = await parseResponse<{
-        messages: SavedMessage[];
-      }>(historyResponse);
 
       pending.current = null;
-      setMessages(history.messages);
-      setInput('');
-      await mutate('/api/conversations');
+      setPendingMessage(null);
+      const now = new Date().toISOString();
+      setMessages((current) => [
+        ...current,
+        {
+          id: `${completion.requestId}-user`,
+          request_id: completion.requestId,
+          sequence: current.length + 1,
+          role: 'user',
+          content: text,
+          status: 'completed',
+          created_at: now,
+        },
+        {
+          id: `${completion.requestId}-assistant`,
+          request_id: completion.requestId,
+          sequence: current.length + 2,
+          role: 'assistant',
+          content: completion.reply,
+          status: 'completed',
+          created_at: now,
+        },
+      ]);
 
-      if (!initialConversationId) {
+      let historySynced = false;
+      try {
+        const historyResponse = await fetch(
+          `/api/conversations/${activeConversationId}/messages`
+        );
+        const history = await parseResponse<{ messages: SavedMessage[] }>(
+          historyResponse
+        );
+        setMessages(history.messages);
+        historySynced = true;
+      } catch {
+        setError(
+          'Reply saved, but the conversation could not refresh. Reopen it to sync.'
+        );
+      }
+      void mutate('/api/conversations').catch(() => {});
+
+      if (!initialConversationId && historySynced) {
         router.replace(`/chat/${activeConversationId}`);
       }
     } catch (caughtError) {
@@ -230,12 +255,15 @@ export function BackendTestChat({
         )
           pending.current = null;
       }
+      setPendingMessage(null);
+      setInput(text);
       setError(
         caughtError instanceof Error
           ? caughtError.message
           : 'Could not send the message. Your draft is saved; try again'
       );
     } finally {
+      inFlight.current = false;
       setIsSending(false);
     }
   }
@@ -246,7 +274,9 @@ export function BackendTestChat({
         <SidebarToggle />
 
         <div>
-          <div className="font-semibold"><span aria-hidden="true">👎</span> DeInfluenceMe</div>
+          <div className="font-semibold">
+            <span aria-hidden="true">👎</span> DeInfluenceMe
+          </div>
           <div className="text-xs text-muted-foreground">
             Your advisor workspace
           </div>
@@ -271,7 +301,7 @@ export function BackendTestChat({
             </p>
           )}
 
-          {!isStarting && messages.length === 0 && (
+          {!isStarting && messages.length === 0 && !pendingMessage && (
             <p className="text-center text-muted-foreground">
               What would you like help with today?
             </p>
@@ -294,7 +324,17 @@ export function BackendTestChat({
             </div>
           ))}
 
-          {isSending && (
+          {pendingMessage && (
+            <div
+              className="ml-auto max-w-[80%] rounded-xl bg-primary px-4 py-3 text-primary-foreground"
+              key={pendingMessage.id}
+            >
+              <div className="mb-1 text-xs opacity-70">You · Sending...</div>
+              <div className="whitespace-pre-wrap">{pendingMessage.text}</div>
+            </div>
+          )}
+
+          {isSending && pendingMessage && (
             <p className="text-sm text-muted-foreground">
               Advisor is responding...
             </p>
@@ -318,6 +358,7 @@ export function BackendTestChat({
         onSubmit={handleSubmit}
       >
         <Textarea
+          disabled={isSending || isStarting}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {

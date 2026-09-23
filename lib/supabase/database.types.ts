@@ -289,6 +289,13 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      delete_advisor_conversation: {
+        Args: {
+          p_user_id: string;
+          p_conversation_id: string;
+        };
+        Returns: boolean;
+      };
       reserve_advisor_tokens: {
         Args: {
           p_user_id: string;
