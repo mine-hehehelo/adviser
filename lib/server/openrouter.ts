@@ -130,7 +130,7 @@ export async function generateAdvisorReply(
       error instanceof Error ? error.message : 'Unknown error'
     );
 
-    throw new HttpError(502, 'The advisor service is temporarily unavailable');
+    throw new HttpError(502, 'The advisor service is temporarily unavailable', 'provider_unavailable');
   }
 
   if (!response.ok) {
@@ -149,7 +149,7 @@ export async function generateAdvisorReply(
       );
     }
 
-    throw new HttpError(502, 'The advisor service is temporarily unavailable');
+    throw new HttpError(502, 'The advisor service is temporarily unavailable', 'provider_unavailable');
   }
 
   let result: OpenRouterResponse;
@@ -157,7 +157,7 @@ export async function generateAdvisorReply(
     result = await response.json();
   } catch {
     await recordEvent('provider_error', context, { kind: 'invalid_response' });
-    throw new HttpError(502, 'The advisor did not return a usable response');
+    throw new HttpError(502, 'The advisor did not return a usable response. Please try again', 'invalid_response');
   }
 
   const content = result.choices?.[0]?.message?.content;
@@ -165,7 +165,7 @@ export async function generateAdvisorReply(
 
   if (!reply) {
     await recordEvent('provider_error', context, { kind: 'invalid_response' });
-    throw new HttpError(502, 'The advisor did not return a usable response');
+    throw new HttpError(502, 'The advisor did not return a usable response. Please try again', 'invalid_response');
   }
 
   return {

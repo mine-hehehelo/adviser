@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   ChatRequestError,
   parseChatResponse as parseResponse,
+  shouldDiscardPendingRequest,
 } from '@/lib/chat-response';
 import { isConversationListKey } from '@/lib/conversation-cache';
 import { titleFromMessage } from '@/lib/conversation-title';
@@ -339,14 +340,7 @@ export function BackendTestChat({
           setClock(Date.now());
           setRetryUntil(Date.now() + caughtError.retryAfterSeconds * 1000);
         }
-        const discardRequest =
-          caughtError.status === 429 ||
-          caughtError.code === 'previous_failed' ||
-          (caughtError.status < 500 &&
-            caughtError.code !== 'processing' &&
-            caughtError.code !== 'conversation_busy' &&
-            caughtError.code !== 'previous_uncertain');
-        if (discardRequest) {
+        if (shouldDiscardPendingRequest(caughtError)) {
           pending.current = null;
           clearPending([pendingKey, chatPendingKey(viewerId, activeConversationId)]);
         }

@@ -9,6 +9,22 @@ export class ChatRequestError extends Error {
   }
 }
 
+// Keep the request ID when the browser cannot tell whether a turn completed.
+// A server-confirmed provider failure has no saved reply, so the next manual
+// send may use a fresh ID.
+export function shouldDiscardPendingRequest(error: ChatRequestError): boolean {
+  if (error.status === 429) return true;
+  if (
+    error.code === 'previous_failed' ||
+    error.code === 'previous_uncertain' ||
+    error.code === 'provider_unavailable' ||
+    error.code === 'invalid_response'
+  ) return true;
+  return error.status < 500 &&
+    error.code !== 'processing' &&
+    error.code !== 'conversation_busy';
+}
+
 export async function parseChatResponse<T>(response: Response): Promise<T> {
   const body = await response.json();
   if (!response.ok) {
