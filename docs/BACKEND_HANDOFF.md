@@ -1,5 +1,7 @@
 # Advisor Console Backend Handoff
 
+> Historical build record. This document predates the DeInfluenceMe candidate's October 2026 retry/recovery work and still contains earlier ownership and deployment notes. For current requirements, setup, and release order, use `docs/REVISED_PRD.md`, `README.md`, and `docs/DEPLOYMENT.md`; confirm behavior in the current code.
+
 ## Document control
 
 | Item | Value |

@@ -109,9 +109,10 @@ async function fetchGoogleDocument(
   service: docs_v1.Docs,
   documentId: string
 ): Promise<string> {
-  const response = await service.documents.get({
-    documentId,
-  });
+  const response = await service.documents.get(
+    { documentId },
+    { timeout: 15_000 }
+  );
 
   const text = extractDocumentText(response.data.body?.content ?? []);
 
@@ -142,24 +143,48 @@ async function saveCachedDocuments(
   promptText: string,
   referenceText: string,
   fetchedAt: string
-): Promise<void> {
+): Promise<CacheRow> {
   const admin = createAdminClient();
 
-  const { error } = await admin.from('advisor_document_cache').upsert(
-    {
-      cache_key: CACHE_KEY,
-      prompt_text: promptText,
-      reference_text: referenceText,
-      fetched_at: fetchedAt,
-    },
-    {
-      onConflict: 'cache_key',
-    }
-  );
+  const { data, error } = await admin
+    .rpc('write_advisor_document_cache', {
+      p_prompt_text: promptText,
+      p_reference_text: referenceText,
+      p_fetch_started_at: fetchedAt,
+    })
+    .single();
 
-  if (error) {
+  if (error || !data) {
     throw new Error('Unable to update the advisor document cache');
   }
+
+  return data as CacheRow;
+}
+
+let activeRefresh: Promise<CacheRow> | null = null;
+
+function refreshDocuments(): Promise<CacheRow> {
+  if (!activeRefresh) {
+    activeRefresh = (async () => {
+      const credentials = getServiceAccountCredentials();
+      const authentication = new google.auth.GoogleAuth({
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/documents.readonly'],
+      });
+      const service = google.docs({ version: 'v1', auth: authentication });
+      const promptId = requireEnvironmentVariable('GOOGLE_PROMPT_DOC_ID');
+      const referenceId = requireEnvironmentVariable('GOOGLE_REFERENCE_DOC_ID');
+      const fetchStartedAt = new Date().toISOString();
+      const [promptText, referenceText] = await Promise.all([
+        fetchGoogleDocument(service, promptId),
+        fetchGoogleDocument(service, referenceId),
+      ]);
+      return saveCachedDocuments(promptText, referenceText, fetchStartedAt);
+    })().finally(() => {
+      activeRefresh = null;
+    });
+  }
+  return activeRefresh;
 }
 
 export async function loadAdvisorDocuments(
@@ -185,38 +210,16 @@ export async function loadAdvisorDocuments(
 
   await recordEvent('prompt_cache_miss', context);
   try {
-    const credentials = getServiceAccountCredentials();
-
-    const authentication = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ['https://www.googleapis.com/auth/documents.readonly'],
-    });
-
-    const service = google.docs({
-      version: 'v1',
-      auth: authentication,
-    });
-
-    const promptDocumentId = requireEnvironmentVariable('GOOGLE_PROMPT_DOC_ID');
-
-    const referenceDocumentId = requireEnvironmentVariable(
-      'GOOGLE_REFERENCE_DOC_ID'
-    );
-
-    const [promptText, referenceText] = await Promise.all([
-      fetchGoogleDocument(service, promptDocumentId),
-      fetchGoogleDocument(service, referenceDocumentId),
-    ]);
-
-    const fetchedAt = new Date().toISOString();
-
-    await saveCachedDocuments(promptText, referenceText, fetchedAt);
+    const saved = await refreshDocuments();
+    const updatedByThisFetch = !cachedDocuments ||
+      new Date(saved.fetched_at).getTime() >
+        new Date(cachedDocuments.fetched_at).getTime();
 
     return {
-      promptText,
-      referenceText,
-      fetchedAt,
-      source: 'google',
+      promptText: saved.prompt_text,
+      referenceText: saved.reference_text,
+      fetchedAt: saved.fetched_at,
+      source: updatedByThisFetch ? 'google' : 'cache',
     };
   } catch (error) {
     console.error(

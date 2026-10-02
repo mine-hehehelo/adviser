@@ -127,3 +127,33 @@ test('an in-flight request ID is also bound to its original text', async () => {
   assert.equal(conflict.status, 409);
   assert.equal((await conflict.json()).code, 'request_id_conflict');
 });
+
+test('emoji messages use Unicode characters, not UTF-16 units, for the length limit', async () => {
+  const text = '😀'.repeat(3000);
+  messages = [];
+  turn = { user_id: userId, conversation_id: conversationId, request_id: requestId, user_input: text };
+  beginResult = {
+    allowed: false, duplicate: true, status: 'processing',
+    turn_log_id: '44444444-4444-4444-8444-444444444444',
+  };
+  const accepted = await route.POST(messageRequest(text), context(conversationId));
+  assert.equal(accepted.status, 409);
+  assert.equal((await accepted.json()).code, 'processing');
+  const invalid = await route.POST(messageRequest('\ud83d'), context(conversationId));
+  assert.equal(invalid.status, 400);
+});
+
+test('a busy conversation rejects a second send before loading history', async () => {
+  messages = [];
+  turn = null;
+  rangeCalls = [];
+  beginResult = {
+    allowed: false, duplicate: false, status: 'processing',
+    reason: 'conversation_busy', retry_after_seconds: 5,
+    turn_log_id: '44444444-4444-4444-8444-444444444444',
+  };
+  const response = await route.POST(messageRequest('Follow-up'), context(conversationId));
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, 'conversation_busy');
+  assert.deepEqual(rangeCalls, []);
+});

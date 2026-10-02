@@ -13,6 +13,8 @@ import {
   ChatRequestError,
   parseChatResponse as parseResponse,
 } from '@/lib/chat-response';
+import { isConversationListKey } from '@/lib/conversation-cache';
+import { titleFromMessage } from '@/lib/conversation-title';
 
 type Conversation = {
   id: string;
@@ -29,10 +31,50 @@ type SavedMessage = {
   created_at: string;
 };
 
+type PendingRequest = { id: string; text: string; conversation: string };
+
+const chatPendingKey = (viewerId: string | undefined, id: string) =>
+  viewerId ? `advisor-pending:${viewerId}:chat:${id}` : null;
+
+function readPending(key: string | null): PendingRequest | null {
+  if (!key) return null;
+  try {
+    const value = JSON.parse(sessionStorage.getItem(key) ?? 'null');
+    return value &&
+      typeof value.id === 'string' &&
+      typeof value.text === 'string' &&
+      typeof value.conversation === 'string'
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function storePending(keys: (string | null)[], value: PendingRequest) {
+  try {
+    for (const key of keys) if (key) sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // The in-memory request ID still protects retries in this open page.
+  }
+}
+
+function clearPending(keys: (string | null)[]) {
+  try {
+    for (const key of keys) if (key) sessionStorage.removeItem(key);
+  } catch {
+    // Storage can be disabled by the browser; the visible chat still works.
+  }
+}
+
 export function BackendTestChat({
   initialConversationId,
+  viewerId,
+  draftId,
 }: {
   initialConversationId?: string;
+  viewerId?: string;
+  draftId?: string;
 }) {
   const router = useRouter();
   const { mutate } = useSWRConfig();
@@ -48,13 +90,19 @@ export function BackendTestChat({
   const [error, setError] = useState<string | null>(null);
   const [retryUntil, setRetryUntil] = useState(0);
   const [clock, setClock] = useState(Date.now());
-  const pending = useRef<{
-    id: string;
-    text: string;
-    conversation: string;
-  } | null>(null);
+  const pending = useRef<PendingRequest | null>(null);
   const inFlight = useRef(false);
+  const mounted = useRef(false);
+  const pendingKey = viewerId
+    ? `advisor-pending:${viewerId}:${initialConversationId ? `chat:${initialConversationId}` : `draft:${draftId ?? 'root'}`}`
+    : null;
   const retrySeconds = Math.max(0, Math.ceil((retryUntil - clock) / 1000));
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   useEffect(() => {
     if (!retryUntil) return;
     const timer = setInterval(() => setClock(Date.now()), 250);
@@ -65,15 +113,17 @@ export function BackendTestChat({
     let cancelled = false;
 
     async function loadConversation() {
+      const saved = readPending(pendingKey);
+      const selectedId = initialConversationId ?? saved?.conversation;
       try {
-        if (!initialConversationId || cancelled) {
+        if (!selectedId || cancelled) {
           setConversationId(null);
           setMessages([]);
           return;
         }
 
         const historyResponse = await fetch(
-          `/api/conversations/${initialConversationId}/messages`
+          `/api/conversations/${selectedId}/messages`
         );
 
         const history = await parseResponse<{
@@ -81,16 +131,36 @@ export function BackendTestChat({
         }>(historyResponse);
 
         if (!cancelled) {
-          setConversationId(initialConversationId);
+          setConversationId(selectedId);
           setMessages(history.messages);
+          if (saved) {
+            const completed = history.messages.some(
+              (message) =>
+                message.request_id === saved.id && message.role === 'assistant'
+            );
+            if (completed) {
+              clearPending([pendingKey, chatPendingKey(viewerId, saved.conversation)]);
+              if (!initialConversationId) router.replace(`/chat/${selectedId}`);
+            } else {
+              pending.current = saved;
+              setInput(saved.text);
+            }
+          }
         }
       } catch (caughtError) {
         if (!cancelled) {
-          setError(
-            caughtError instanceof Error
-              ? caughtError.message
-              : 'Could not load the conversation'
-          );
+          if (saved && !initialConversationId) {
+            // Creation may have succeeded while its response was lost.
+            pending.current = saved;
+            setInput(saved.text);
+            setConversationId(null);
+          } else {
+            setError(
+              caughtError instanceof Error
+                ? caughtError.message
+                : 'Could not load the conversation'
+            );
+          }
         }
       } finally {
         if (!cancelled) {
@@ -107,25 +177,26 @@ export function BackendTestChat({
     return () => {
       cancelled = true;
     };
-  }, [initialConversationId]);
+  }, [initialConversationId, pendingKey, viewerId, router]);
 
-  async function createConversation(title: string) {
+  async function createConversation(title: string, id: string) {
     const response = await fetch('/api/conversations', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ id, title }),
     });
 
     const result = await parseResponse<{
       conversation: Conversation;
+      reused?: boolean;
     }>(response);
 
-    setConversationId(result.conversation.id);
-    void mutate('/api/conversations').catch(() => {});
+    if (mounted.current) setConversationId(result.conversation.id);
+    void mutate(isConversationListKey).catch(() => {});
 
-    return result.conversation.id;
+    return { id: result.conversation.id, created: !result.reused };
   }
 
   function handleNewConversation() {
@@ -144,21 +215,35 @@ export function BackendTestChat({
     inFlight.current = true;
     setIsSending(true);
     setError(null);
-    const requestId =
+    const prior =
       pending.current?.text === text &&
-      pending.current.conversation === conversationId
-        ? pending.current.id
-        : crypto.randomUUID();
+      (!conversationId || pending.current.conversation === conversationId)
+        ? pending.current
+        : null;
+    const requestId = prior?.id ?? crypto.randomUUID();
+    let activeConversationId =
+      conversationId ?? prior?.conversation ?? crypto.randomUUID();
+    pending.current = {
+      id: requestId,
+      text,
+      conversation: activeConversationId,
+    };
+    storePending(
+      [pendingKey, chatPendingKey(viewerId, activeConversationId)],
+      pending.current
+    );
     setPendingMessage({ id: requestId, text });
     setInput('');
+    let conversationCreated = false;
 
     try {
-      let activeConversationId = conversationId;
-
-      if (!activeConversationId) {
-        activeConversationId = await createConversation(
-          text.replace(/\s+/g, ' ').slice(0, 60)
+      if (!conversationId) {
+        const created = await createConversation(
+          titleFromMessage(text),
+          activeConversationId
         );
+        activeConversationId = created.id;
+        conversationCreated = created.created;
       }
 
       pending.current = {
@@ -195,11 +280,17 @@ export function BackendTestChat({
           text,
           conversation: activeConversationId,
         };
+        storePending(
+          [pendingKey, chatPendingKey(viewerId, activeConversationId)],
+          pending.current
+        );
         setPendingMessage({ id: freshId, text });
         completion = await send(freshId);
       }
 
       pending.current = null;
+      clearPending([pendingKey, chatPendingKey(viewerId, activeConversationId)]);
+      if (!mounted.current) return;
       setPendingMessage(null);
       const now = new Date().toISOString();
       setMessages((current) => [
@@ -224,7 +315,6 @@ export function BackendTestChat({
         },
       ]);
 
-      let historySynced = false;
       try {
         const historyResponse = await fetch(
           `/api/conversations/${activeConversationId}/messages`
@@ -233,15 +323,14 @@ export function BackendTestChat({
           historyResponse
         );
         setMessages(history.messages);
-        historySynced = true;
       } catch {
         setError(
           'Reply saved, but the conversation could not refresh. Reopen it to sync.'
         );
       }
-      void mutate('/api/conversations').catch(() => {});
+      void mutate(isConversationListKey).catch(() => {});
 
-      if (!initialConversationId && historySynced) {
+      if (!initialConversationId) {
         router.replace(`/chat/${activeConversationId}`);
       }
     } catch (caughtError) {
@@ -250,13 +339,33 @@ export function BackendTestChat({
           setClock(Date.now());
           setRetryUntil(Date.now() + caughtError.retryAfterSeconds * 1000);
         }
-        if (
+        const discardRequest =
           caughtError.status === 429 ||
           caughtError.code === 'previous_failed' ||
-          (caughtError.status < 500 && caughtError.code !== 'processing')
-        )
+          (caughtError.status < 500 &&
+            caughtError.code !== 'processing' &&
+            caughtError.code !== 'conversation_busy' &&
+            caughtError.code !== 'previous_uncertain');
+        if (discardRequest) {
           pending.current = null;
+          clearPending([pendingKey, chatPendingKey(viewerId, activeConversationId)]);
+        }
+        if (caughtError.status === 429 && conversationCreated) {
+          // A first message blocked by a limit should not leave an empty chat.
+          try {
+            const response = await fetch(`/api/conversations/${activeConversationId}`, {
+              method: 'DELETE',
+            });
+            if (response.ok) {
+              if (mounted.current) setConversationId(null);
+              void mutate(isConversationListKey).catch(() => {});
+            }
+          } catch {
+            // An old empty chat can still be removed from the sidebar.
+          }
+        }
       }
+      if (!mounted.current) return;
       setPendingMessage(null);
       setInput(text);
       setError(
@@ -266,7 +375,7 @@ export function BackendTestChat({
       );
     } finally {
       inFlight.current = false;
-      setIsSending(false);
+      if (mounted.current) setIsSending(false);
     }
   }
 
