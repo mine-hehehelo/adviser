@@ -24,14 +24,24 @@ export async function recordEvent(
   context?: EventContext,
   metadata: EventMetadata = {}
 ) {
-  const { error } = await createAdminClient()
-    .from('advisor_events')
-    .insert({
-      event_name: name,
-      user_id: context?.userId ?? null,
-      conversation_id: context?.conversationId ?? null,
-      request_id: context?.requestId ?? null,
-      metadata,
-    });
-  if (error) throw new Error('Unable to record advisor event');
+  try {
+    const { error } = await createAdminClient()
+      .from('advisor_events')
+      .insert({
+        event_name: name,
+        user_id: context?.userId ?? null,
+        conversation_id: context?.conversationId ?? null,
+        request_id: context?.requestId ?? null,
+        metadata,
+      });
+    if (error) throw error;
+  } catch (error) {
+    // Diagnostic writes are best effort; the protected turn log remains durable.
+    console.error(
+      'Unable to record advisor event:',
+      error && typeof error === 'object' && 'message' in error
+        ? String(error.message)
+        : 'Unknown error'
+    );
+  }
 }

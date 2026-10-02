@@ -25,6 +25,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { conversationListKey } from '@/lib/conversation-cache';
 
 import type { User } from '@supabase/supabase-js';
 
@@ -62,8 +63,8 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
   const activeId = typeof params.id === 'string' ? params.id : undefined;
 
   const { data, error, isLoading } = useSWR<ConversationResponse>(
-    user ? '/api/conversations' : null,
-    fetchConversations,
+    user ? conversationListKey(user.id) : null,
+    ([url]: readonly [string, string]) => fetchConversations(url),
     {
       refreshInterval: 5000,
       revalidateOnFocus: true,
@@ -112,7 +113,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
         const body = await response.json();
         throw new Error(body.error ?? 'Could not delete the conversation');
       }
-      void mutate('/api/conversations').catch(() => {});
+      if (user) void mutate(conversationListKey(user.id)).catch(() => {});
       if (activeId === conversation.id) {
         router.replace(`/?draft=${crypto.randomUUID()}`);
       }

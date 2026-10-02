@@ -289,6 +289,26 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      purge_empty_advisor_conversations: {
+        Args: { p_user_id: string };
+        Returns: number;
+      };
+      reconcile_stale_advisor_turns: {
+        Args: { p_user_id: string };
+        Returns: number;
+      };
+      write_advisor_document_cache: {
+        Args: {
+          p_prompt_text: string;
+          p_reference_text: string;
+          p_fetch_started_at: string;
+        };
+        Returns: {
+          prompt_text: string;
+          reference_text: string;
+          fetched_at: string;
+        }[];
+      };
       delete_advisor_conversation: {
         Args: {
           p_user_id: string;

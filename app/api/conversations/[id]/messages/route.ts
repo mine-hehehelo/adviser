@@ -9,6 +9,7 @@ import { requireAllowedUser } from '@/lib/server/auth';
 import { errorResponse, HttpError } from '@/lib/server/errors';
 import {
   generateAdvisorReply,
+  getOpenRouterConfiguration,
   type OpenRouterMessage,
 } from '@/lib/server/openrouter';
 import { estimateTokenBudget } from '@/lib/server/token-budget';
@@ -51,7 +52,13 @@ async function loadConversationMessages(
 
 const sendMessageSchema = z.object({
   requestId: z.string().uuid(),
-  text: z.string().trim().min(1).max(4000),
+  text: z.string().trim().min(1).refine((value) => {
+    const characters = [...value];
+    return characters.length <= 4000 && characters.every((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint < 0xd800 || codePoint > 0xdfff;
+    });
+  }, 'Message must contain valid Unicode and at most 4,000 characters'),
 });
 
 const limitReasonSchema = z.enum(['message_cap', 'token_cap', 'rate_limit']);
@@ -62,8 +69,9 @@ const beginAdvisorTurnSchema = z.object({
   allowed: z.boolean(),
   duplicate: z.boolean(),
   status: z.enum(['processing', 'completed', 'blocked', 'failed']),
-  reason: limitReasonSchema.nullable().optional(),
+  reason: z.union([limitReasonSchema, z.literal('conversation_busy')]).nullable().optional(),
   reply: z.string().nullable().optional(),
+  provider_started: z.boolean().nullable().optional(),
   turn_log_id: z.string().uuid(),
   retry_after_seconds: z.number().int().positive().nullable().optional(),
 });
@@ -197,11 +205,8 @@ export async function POST(request: Request, context: RouteContext) {
       });
     }
 
-    // Load previous messages so the model understands the conversation
-
-    const history = await loadConversationMessages(admin, id, true);
-
-    // Check and reserve the user's usage before external API work
+    // Admit the turn before loading history. This serializes one conversation
+    // across tabs and avoids reading long histories for blocked requests.
 
     const limits = getUsageLimits();
 
@@ -255,7 +260,11 @@ export async function POST(request: Request, context: RouteContext) {
         });
       }
 
-      if (beginTurn.status === 'blocked' && beginTurn.reason) {
+      if (
+        beginTurn.status === 'blocked' &&
+        beginTurn.reason &&
+        beginTurn.reason !== 'conversation_busy'
+      ) {
         return createLimitResponse(
           beginTurn.reason,
           beginTurn.retry_after_seconds
@@ -273,14 +282,24 @@ export async function POST(request: Request, context: RouteContext) {
 
       throw new HttpError(
         409,
-        'The previous attempt failed. You can send your message again',
-        'previous_failed'
+        beginTurn.provider_started
+          ? 'The previous attempt may have reached the advisor. Check your conversation before sending again'
+          : 'The previous attempt failed. You can send your message again',
+        beginTurn.provider_started ? 'previous_uncertain' : 'previous_failed'
       );
     }
 
     // Stop a newly blocked request before calling OpenRouter
 
     if (!beginTurn.allowed) {
+      if (beginTurn.reason === 'conversation_busy') {
+        throw new HttpError(
+          409,
+          'Another message is still being answered in this conversation',
+          'conversation_busy',
+          beginTurn.retry_after_seconds ?? 5
+        );
+      }
       if (!beginTurn.reason) {
         throw new Error('Blocked advisor request did not include a reason');
       }
@@ -296,6 +315,12 @@ export async function POST(request: Request, context: RouteContext) {
     let documentSource: AdvisorPrompt['documentSource'] | null = null;
 
     try {
+      // Fail local configuration before marking a provider call as started.
+      getOpenRouterConfiguration();
+
+      // Read history only after this conversation has been admitted.
+      const history = await loadConversationMessages(admin, id, true);
+
       // Load the private instructions and complete reference document
 
       const eventContext = {

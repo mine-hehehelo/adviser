@@ -38,16 +38,13 @@ type OpenRouterResponse = {
 };
 
 function cleanAdvisorReply(content: string): string {
-  return content
-    .trim()
-    .replace(
-      /^(?:(?:user|assistant|input|output|response)\s+)?safety\s*:\s*(?:safe|unsafe|unknown|allowed|blocked)[.!]?[ \t]*(?:\r?\n|$)/i,
-      ''
-    )
-    .trim();
+  const safetyLine = /^(?:(?:user|assistant|input|output|response)\s+)?safety\s*:\s*(?:safe|unsafe|unknown|allowed|blocked)[.!]?[ \t]*(?:\r?\n|$)/i;
+  let reply = content.trim();
+  while (safetyLine.test(reply)) reply = reply.replace(safetyLine, '').trim();
+  return reply;
 }
 
-function getOpenRouterConfiguration() {
+export function getOpenRouterConfiguration() {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   const model = process.env.OPENROUTER_MODEL?.trim();
 

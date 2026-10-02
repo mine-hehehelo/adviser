@@ -29,6 +29,9 @@ The project keeps the Apache License 2.0 notice from Vercel
 - Added a delete-chat route that removes messages and redacts turn text while retaining usage totals
 - Started new chats as blank drafts and showed a sent-message bubble while the advisor responds
 - Added duplicate-request protection for message retries
+- Serialized turns within each conversation and recover abandoned processing turns after ten minutes
+- Kept the first-send conversation and request IDs across a page reload so retries can find the same turn
+- Made first-message titles Unicode-safe, including emoji at the title boundary
 - Added read-only Google Docs access for the prompt and reference document
 - Added a five-minute document cache with a last-valid-cache fallback
 - Added full reference-document grounding without keyword selection
@@ -98,8 +101,13 @@ Current database functions:
 - `reserve_advisor_tokens`
 - `start_advisor_provider`
 - `delete_advisor_conversation`
+- `reconcile_stale_advisor_turns`
+- `purge_empty_advisor_conversations`
+- `write_advisor_document_cache`
 
 Apply the files in `supabase/migrations/` to a new Supabase project
+
+For an existing project, apply both `20261002` migrations before deploying this branch; the conversation list and document refresh call the new functions
 
 Do not apply files in `template-reference/template-migrations/`
 
